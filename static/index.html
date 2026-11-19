@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="hu">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Nordwind | Számlák és cash-flow</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand-mark">N</div>
+    <div>
+      <p class="eyebrow">NORDWIND SOLUTIONS KFT.</p>
+      <h1>Számlák és cash-flow</h1>
+    </div>
+    <span class="currency-badge">HUF kimutatás</span>
+  </header>
+  <main>
+    <section class="upload-panel">
+      <div>
+        <p class="eyebrow">DOKUMENTUMOK</p>
+        <h2>Számlák feldolgozása</h2>
+      </div>
+      <form id="upload-form">
+        <label class="file-picker" for="files">PDF-ek kiválasztása</label>
+        <input id="files" name="files" type="file" accept="application/pdf,.pdf" multiple required>
+        <button id="upload-button" type="submit">Feltöltés és feldolgozás</button>
+      </form>
+      <div id="upload-status" role="status" aria-live="polite"></div>
+    </section>
+
+    <section class="panel">
+      <div class="section-heading">
+        <div><p class="eyebrow">FIZETÉSI HATÁRIDŐ SZERINT</p><h2>Havi pénzmozgás</h2></div>
+        <p class="muted">Bruttó összegek · HUF</p>
+      </div>
+      <div class="chart-legend"><span><i class="dot incoming"></i> Bejövő</span><span><i class="dot outgoing"></i> Kimenő</span></div>
+      <div class="chart-wrap"><svg id="cashflow-chart" role="img" aria-label="Havi bejövő és kimenő számlaösszegek"></svg></div>
+    </section>
+
+    <section class="panel">
+      <div class="section-heading">
+        <div><p class="eyebrow">PARTNERENKÉNT</p><h2>Cégenkénti összesítő</h2></div>
+        <p class="muted">Bruttó összegek · HUF</p>
+      </div>
+      <div class="table-wrap"><table id="partner-table"></table></div>
+    </section>
+
+    <section class="panel">
+      <div class="section-heading">
+        <div><p class="eyebrow">ELLENŐRIZHETŐ ADATOK</p><h2>Számlalista</h2></div>
+        <span id="invoice-count" class="count-badge">0 számla</span>
+      </div>
+      <div class="table-wrap"><table id="invoice-table"></table></div>
+    </section>
+    <section id="errors-panel" class="panel errors-panel" hidden>
+      <div class="section-heading"><div><p class="eyebrow">FELDOLGOZÁSI HIBÁK</p><h2>Nem feldolgozott fájlok</h2></div></div>
+      <div class="table-wrap"><table id="error-table"></table></div>
+    </section>
+    <footer>Az árfolyam az MNB teljesítési napon érvényes hivatalos árfolyama; jegyzés nélküli napon az utolsó korábbi jegyzés.</footer>
+  </main>
+  <script src="/static/app.js"></script>
+</body>
+</html>

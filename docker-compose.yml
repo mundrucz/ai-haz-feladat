@@ -1,0 +1,17 @@
+services:
+  invoice-app:
+    build: .
+    ports:
+      - "${APP_PORT:-8080}:8080"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DB_PATH: /data/invoices.db
+      OPENROUTER_MODEL: ${OPENROUTER_MODEL:-openai/gpt-4o-mini}
+    volumes:
+      - invoice-data:/data
+    restart: unless-stopped
+
+volumes:
+  invoice-data:
