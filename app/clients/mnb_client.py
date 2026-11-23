@@ -1,0 +1,174 @@
+"""MNB árfolyam-webszolgáltatás (SOAP) kliense: bármely deviza, bármely időszak."""
+
+import asyncio
+import logging
+import re
+import xml.etree.ElementTree as ET
+from dataclasses import dataclass
+from datetime import date
+from decimal import Decimal, InvalidOperation
+
+import httpx
+
+from app.errors import AppError
+
+logger = logging.getLogger(__name__)
+
+_NAMESPACE = "http://www.mnb.hu/webservices/"
+_CURRENCY = re.compile(r"[A-Z]{3}")
+
+
+class MnbError(AppError):
+    """Az MNB-től nem sikerült árfolyamot kérni; az érintett számlánál jelenik meg."""
+
+    code = "mnb_unavailable"
+    status_code = 502
+
+
+class MnbNoRateError(MnbError):
+    code = "mnb_no_rate"
+
+
+@dataclass(frozen=True, slots=True)
+class RateQuote:
+    """`unit` egység `currency` ára forintban az adott napon."""
+
+    currency: str
+    rate_date: date
+    unit: int
+    rate: Decimal
+
+
+class MnbClient:
+    """Nyers SOAP-kliens; a HTTP-klienst kívülről kapja (tesztben mockolható)."""
+
+    def __init__(
+        self,
+        http: httpx.AsyncClient,
+        *,
+        url: str,
+        timeout: float = 20.0,
+        concurrency: int = 2,
+        max_retries: int = 2,
+        retry_delay: float = 1.0,
+    ) -> None:
+        self._http = http
+        self._url = url
+        self._timeout = timeout
+        self._slots = asyncio.Semaphore(max(1, concurrency))
+        self._max_retries = max_retries
+        self._retry_delay = retry_delay
+
+    async def fetch_rates(self, currency: str, start: date, end: date) -> list[RateQuote]:
+        """A deviza napi árfolyamai az időszakban; csak a jegyzési napok szerepelnek az eredményben."""
+        if not _CURRENCY.fullmatch(currency):
+            raise MnbNoRateError(f"invalid currency code: {currency!r}")
+        envelope = _envelope(currency, start, end)
+        async with self._slots:
+            body = await self._post_with_retry(envelope)
+        return _parse_rates(body, currency)
+
+    async def _post_with_retry(self, envelope: str) -> str:
+        attempt = 0
+        while True:
+            try:
+                return await self._post(envelope)
+            except _Transient as exc:
+                if attempt >= self._max_retries:
+                    raise MnbError(str(exc)) from exc
+                delay = self._retry_delay * 2**attempt
+                attempt += 1
+                logger.warning("mnb retry", extra={"attempt": attempt, "delay": delay})
+                await asyncio.sleep(delay)
+
+    async def _post(self, envelope: str) -> str:
+        try:
+            response = await self._http.post(
+                self._url,
+                content=envelope.encode("utf-8"),
+                headers={
+                    "Content-Type": "text/xml; charset=utf-8",
+                    "SOAPAction": f'"{_NAMESPACE}MNBArfolyamServiceSoap/GetExchangeRates"',
+                },
+                timeout=self._timeout,
+            )
+        except httpx.TimeoutException as exc:
+            raise _Transient("MNB request timed out") from exc
+        except httpx.HTTPError as exc:
+            raise _Transient(f"MNB request failed: {type(exc).__name__}") from exc
+        if fault := _soap_fault(response.text):
+            raise MnbError(f"MNB error: {fault}")
+        if response.status_code >= 500:
+            raise _Transient(f"MNB request failed ({response.status_code})")
+        if response.status_code >= 400:
+            raise MnbError(f"MNB request failed ({response.status_code})")
+        return response.text
+
+
+class _Transient(Exception):
+    pass
+
+
+def _envelope(currency: str, start: date, end: date) -> str:
+    return (
+        '<?xml version="1.0" encoding="utf-8"?>'
+        '<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/" '
+        f'xmlns:web="{_NAMESPACE}"><soap:Body><web:GetExchangeRates>'
+        f"<web:startDate>{start.isoformat()}</web:startDate>"
+        f"<web:endDate>{end.isoformat()}</web:endDate>"
+        f"<web:currencyNames>{currency}</web:currencyNames>"
+        "</web:GetExchangeRates></soap:Body></soap:Envelope>"
+    )
+
+
+def _local(tag: str) -> str:
+    return tag.rsplit("}", 1)[-1]
+
+
+def _parse_xml(text: str) -> ET.Element:
+    try:
+        return ET.fromstring(text)
+    except ET.ParseError as exc:
+        raise MnbError("MNB response is not valid XML") from exc
+
+
+def _soap_fault(text: str) -> str | None:
+    if "faultstring" not in text:
+        return None
+    try:
+        root = ET.fromstring(text)
+    except ET.ParseError:
+        return None
+    for element in root.iter():
+        if _local(element.tag) == "faultstring":
+            return (element.text or "unknown fault").strip()[:500]
+    return None
+
+
+def _parse_rates(body: str, currency: str) -> list[RateQuote]:
+    envelope = _parse_xml(body)
+    result = next((e for e in envelope.iter() if _local(e.tag) == "GetExchangeRatesResult"), None)
+    if result is None:
+        raise MnbError("MNB response has no GetExchangeRatesResult")
+    inner_text = (result.text or "").strip()
+    if not inner_text:
+        return []
+    quotes: list[RateQuote] = []
+    for day in _parse_xml(inner_text).iter():
+        if _local(day.tag) != "Day":
+            continue
+        try:
+            rate_date = date.fromisoformat(day.get("date", ""))
+        except ValueError:
+            continue
+        for rate in day:
+            if _local(rate.tag) != "Rate" or rate.get("curr") != currency or not (rate.text or "").strip():
+                continue
+            try:
+                value = Decimal(rate.text.strip().replace(",", "."))
+                unit = int(rate.get("unit", "1"))
+            except (InvalidOperation, ValueError):
+                continue
+            if unit > 0 and value > 0:
+                quotes.append(RateQuote(currency, rate_date, unit, value))
+    return quotes
