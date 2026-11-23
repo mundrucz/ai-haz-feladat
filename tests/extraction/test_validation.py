@@ -83,6 +83,55 @@ def test_zero_decimal_currency_scale_is_fine():
     assert validate(fields).status is InvoiceStatus.OK
 
 
+def vat_text(rates: str) -> str:
+    return f"Nettó összesen 1 000,00 EUR\nÁFA összesen {rates} 270,00 EUR\nFizetendő 1 270,00 EUR"
+
+
+def test_vat_matching_the_stated_rate_is_ok():
+    assert validate(GOOD, source_text=vat_text("(27%)")).status is InvoiceStatus.OK
+
+
+def test_vat_not_matching_the_stated_rate_needs_review():
+    fields = replace(GOOD, vat_total=Decimal("190.00"), gross_total=Decimal("1190.00"))
+    result = validate(fields, source_text=vat_text("(27%)"))
+    assert result.status is InvoiceStatus.NEEDS_REVIEW
+    assert codes(result) == {("vat_rate_mismatch", "vat_total")}
+
+
+def test_vat_rate_with_decimal_comma_and_rounding_is_tolerated():
+    fields = replace(GOOD, net_total=Decimal("12345"), vat_total=Decimal("3333"), gross_total=Decimal("15678"))
+    assert validate(fields, source_text="ÁFA (27,0 %) 3 333 Ft").status is InvoiceStatus.OK
+
+
+def test_vat_rate_in_a_separate_line_after_the_vat_header_is_used():
+    fields = replace(GOOD, vat_total=Decimal("190.00"), gross_total=Decimal("1190.00"))
+    result = validate(fields, source_text="Nettó\nÁFA\n27%\n190,00")
+    assert codes(result) == {("vat_rate_mismatch", "vat_total")}
+
+
+def test_mixed_rates_accept_any_vat_up_to_the_highest_rate():
+    text = "ÁFA 27% 270,00\nÁFA 5% 10,00"
+    assert validate(replace(GOOD, vat_total=Decimal("150.00"), gross_total=Decimal("1150.00")), source_text=text).status is InvoiceStatus.OK
+    too_much = replace(GOOD, vat_total=Decimal("400.00"), gross_total=Decimal("1400.00"))
+    assert ("vat_rate_mismatch", "vat_total") in codes(validate(too_much, source_text=text))
+
+
+def test_zero_vat_with_a_zero_rate_is_ok():
+    fields = replace(GOOD, vat_total=Decimal("0.00"), gross_total=Decimal("1000.00"))
+    assert validate(fields, source_text="ÁFA 0% 0,00").status is InvoiceStatus.OK
+
+
+def test_vat_rate_check_ignores_percentages_outside_vat_lines():
+    text = "Kedvezmény 5%\nÁFA összesen 270,00 EUR"
+    assert validate(GOOD, source_text=text).status is InvoiceStatus.OK
+
+
+def test_vat_rate_check_skipped_without_a_stated_rate_or_text():
+    fields = replace(GOOD, vat_total=Decimal("190.00"), gross_total=Decimal("1190.00"))
+    assert validate(fields, source_text="ÁFA összesen 190,00").status is InvoiceStatus.OK
+    assert validate(fields).status is InvoiceStatus.OK
+
+
 def test_totals_check_skipped_when_a_part_is_missing():
     assert validate(replace(GOOD, vat_total=None)).status is InvoiceStatus.OK
     assert validate(replace(GOOD, net_total=None)).status is InvoiceStatus.OK

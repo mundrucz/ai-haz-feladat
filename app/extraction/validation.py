@@ -1,11 +1,14 @@
 """Kinyert mezők validációja: kötelező mezők, számtani és dátumkonzisztencia."""
 
+import re
+import unicodedata
 from dataclasses import dataclass
 from datetime import date, timedelta
 from decimal import Decimal
 from enum import StrEnum
 
 from app.extraction.company import Company
+from app.extraction.labels import Labels, make_lines
 from app.extraction.models import InvoiceFields
 from app.extraction.normalize import is_known_currency, normalize_key
 
@@ -13,6 +16,8 @@ _MIN_YEAR = 2000
 _MAX_YEARS_AHEAD = 5
 _BASE_TOLERANCE = Decimal("0.02")
 _RELATIVE_TOLERANCE = Decimal("0.0005")
+_RATE_ROUNDING = Decimal("0.5")  # tételenkénti és egész pénznemre kerekítés
+_PERCENT = re.compile(r"(?<![\d.,])(\d{1,2}(?:[.,]\d{1,2})?)\s?%")
 
 
 class InvoiceStatus(StrEnum):
@@ -63,6 +68,8 @@ def validate_invoice(
         error("unknown_currency", "currency")
 
     _check_totals(fields, warning)
+    if source_text is not None:
+        _check_vat_rate(fields, source_text, warning)
     _check_dates(fields, warning, today or date.today())
 
     if fields.performance_date is None:
@@ -105,6 +112,39 @@ def _check_totals(fields: InvoiceFields, warning) -> None:
         tolerance = _BASE_TOLERANCE + abs(gross) * _RELATIVE_TOLERANCE
         if abs(net + vat - gross) > tolerance:
             warning("totals_mismatch", "gross_total")
+
+
+def _check_vat_rate(fields: InvoiceFields, text: str, warning) -> None:
+    """Az ÁFA összege a számlán szereplő ÁFA-kulcs(ok) és a nettó alapján megfelel-e."""
+    net, vat = fields.net_total, fields.vat_total
+    if net is None or vat is None or net <= 0 or vat < 0:
+        return
+    rates = _stated_vat_rates(text)
+    if not rates:
+        return
+    tolerance = _RATE_ROUNDING + net * _RELATIVE_TOLERANCE
+    highest = net * max(rates) / 100
+    # Több kulcsnál a nem említett (pl. adómentes) tételek miatt az alsó határ nulla.
+    lowest = net * rates[0] / 100 if len(rates) == 1 else Decimal(0)
+    if not lowest - tolerance <= vat <= highest + tolerance:
+        warning("vat_rate_mismatch", "vat_total")
+
+
+def _stated_vat_rates(text: str) -> list[Decimal]:
+    """A számla ÁFA-feliratos soraiban (és az ÁFA-fejléc utáni sorban) szereplő százalékok, növekvő sorrendben."""
+    labels = Labels.default()
+    lines = make_lines(unicodedata.normalize("NFKC", text))
+    rates: set[Decimal] = set()
+    for index, line in enumerate(lines):
+        if not labels.find(line, ["vat_total"]):
+            continue
+        scanned = [line]
+        if not line.has_digit and index + 1 < len(lines):
+            scanned.append(lines[index + 1])
+        for item in scanned:
+            for match in _PERCENT.finditer(item.raw):
+                rates.add(Decimal(match.group(1).replace(",", ".")))
+    return sorted(rates)
 
 
 def _check_dates(fields: InvoiceFields, warning, today: date) -> None:
