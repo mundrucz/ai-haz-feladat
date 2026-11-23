@@ -12,7 +12,6 @@ def settings(tmp_path: Path) -> Settings:
     return Settings(
         _env_file=None,
         database_path=tmp_path / "test.db",
-        upload_dir=tmp_path / "uploads",
         openrouter_api_key=None,
     )
 

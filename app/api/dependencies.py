@@ -3,8 +3,9 @@ from fastapi.templating import Jinja2Templates
 
 from app.config import Settings
 from app.db import Database
-from app.documents import DocumentRepository
 from app.i18n import Translator
+from app.invoices import InvoiceRepository
+from app.jobs import JobTracker
 from app.upload import UploadService
 
 
@@ -24,8 +25,12 @@ def get_templates(request: Request) -> Jinja2Templates:
     return request.app.state.templates
 
 
-def get_repository(request: Request) -> DocumentRepository:
-    return request.app.state.repository
+def get_jobs(request: Request) -> JobTracker:
+    return request.app.state.jobs
+
+
+def get_invoice_repository(request: Request) -> InvoiceRepository:
+    return request.app.state.invoice_repository
 
 
 def get_upload_service(request: Request) -> UploadService:
