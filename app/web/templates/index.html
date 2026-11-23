@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card">
+  <dl class="facts">
+    <dt>{{ t("home.company") }}</dt><dd>{{ settings.company_name }}</dd>
+    <dt>{{ t("home.tax_number") }}</dt><dd>{{ settings.company_tax_number }}</dd>
+    <dt>{{ t("home.report_currency") }}</dt><dd>{{ settings.report_currency }}</dd>
+  </dl>
+</section>
+
+<section class="card" id="upload-card">
+  <h2>{{ t("ui.upload.title") }}</h2>
+  <div id="dropzone" class="dropzone" tabindex="0">
+    <p>{{ t("ui.upload.hint") }}</p>
+    <button type="button" id="pick-button" class="button">{{ t("ui.upload.button") }}</button>
+    <input type="file" id="file-input" accept="application/pdf,.pdf" multiple hidden>
+  </div>
+  <p id="upload-status" class="muted" role="status"></p>
+  <ul id="upload-issues" class="issues"></ul>
+</section>
+
+<section class="card">
+  <h2>{{ t("ui.docs.title") }}</h2>
+  <p id="docs-summary" class="muted" role="status"></p>
+  <div class="table-wrap">
+    <table id="docs-table" hidden>
+      <thead>
+        <tr>
+          <th>{{ t("ui.docs.col.file") }}</th>
+          <th>{{ t("ui.docs.col.status") }}</th>
+          <th class="num">{{ t("ui.docs.col.pages") }}</th>
+          <th class="num">{{ t("ui.docs.col.size") }}</th>
+          <th>{{ t("ui.docs.col.message") }}</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+</section>
+
+<script id="i18n-data" type="application/json">{{ strings | tojson }}</script>
+<script src="{{ url_for('static', path='app.js') }}" defer></script>
+{% endblock %}
