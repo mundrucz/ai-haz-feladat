@@ -21,6 +21,34 @@
 </section>
 
 <section class="card">
+  <h2 id="chart-title"></h2>
+  <p id="chart-empty" class="muted" role="status">{{ t("ui.report.chart_empty") }}</p>
+  <div class="chart-wrap" id="chart-wrap" hidden>
+    <canvas id="cashflow-chart" role="img" aria-label="{{ t('ui.report.chart_label') }}"></canvas>
+  </div>
+</section>
+
+<section class="card">
+  <h2 id="partners-title"></h2>
+  <p id="partners-empty" class="muted" role="status">{{ t("ui.report.partners_empty") }}</p>
+  <div class="table-wrap">
+    <table id="partners-table" hidden>
+      <thead>
+        <tr>
+          <th>{{ t("ui.report.col.partner") }}</th>
+          <th>{{ t("ui.report.col.tax_id") }}</th>
+          <th class="num">{{ t("ui.report.col.count") }}</th>
+          <th class="num">{{ t("ui.report.col.incoming") }}</th>
+          <th class="num">{{ t("ui.report.col.outgoing") }}</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+      <tfoot></tfoot>
+    </table>
+  </div>
+</section>
+
+<section class="card">
   <h2>{{ t("ui.inv.title") }}</h2>
   <p id="inv-summary" class="muted" role="status"></p>
   <div class="table-wrap">
@@ -37,6 +65,9 @@
           <th class="num">{{ t("ui.inv.col.net") }}</th>
           <th class="num">{{ t("ui.inv.col.vat") }}</th>
           <th class="num">{{ t("ui.inv.col.gross") }}</th>
+          <th>{{ t("ui.inv.col.rate") }}</th>
+          <th>{{ t("ui.inv.col.rate_date") }}</th>
+          <th class="num" id="amount-header"></th>
           <th>{{ t("ui.inv.col.direction") }}</th>
           <th>{{ t("ui.inv.col.partner") }}</th>
           <th>{{ t("ui.inv.col.status") }}</th>
@@ -66,5 +97,6 @@
 </section>
 
 <script id="i18n-data" type="application/json">{{ strings | tojson }}</script>
+<script src="{{ url_for('static', path='vendor/chart.umd.js') }}" defer></script>
 <script src="{{ url_for('static', path='app.js') }}" defer></script>
 {% endblock %}

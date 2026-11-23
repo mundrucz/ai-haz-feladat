@@ -20,6 +20,16 @@
   const invTable = document.getElementById("inv-table");
   const invBody = invTable.querySelector("tbody");
   const locale = document.documentElement.lang || undefined;
+  const chartTitle = document.getElementById("chart-title");
+  const chartWrap = document.getElementById("chart-wrap");
+  const chartEmpty = document.getElementById("chart-empty");
+  const chartCanvas = document.getElementById("cashflow-chart");
+  const partnersTitle = document.getElementById("partners-title");
+  const partnersEmpty = document.getElementById("partners-empty");
+  const partnersTable = document.getElementById("partners-table");
+  const partnersBody = partnersTable.querySelector("tbody");
+  const partnersFoot = partnersTable.querySelector("tfoot");
+  const amountHeader = document.getElementById("amount-header");
 
   const ACTIVE = new Set(["pending", "processing"]);
   let pollTimer = null;
@@ -129,8 +139,9 @@
     return box;
   }
 
-  function renderInvoices(data) {
+  function renderInvoices(data, report) {
     const { invoices, counts } = data;
+    const converted = new Map((report?.invoices ?? []).map((item) => [item.id, item]));
     invTable.hidden = invoices.length === 0;
     invBody.replaceChildren(
       ...invoices.map((invoice) => {
@@ -145,6 +156,10 @@
         cell(row, formatAmount(invoice.net_total), "num");
         cell(row, formatAmount(invoice.vat_total), "num");
         cell(row, formatAmount(invoice.gross_total), "num");
+        const money = converted.get(invoice.id);
+        cell(row, rateText(money));
+        cell(row, money?.rate_date ?? null);
+        cell(row, amountCell(money), "num");
         cell(row, invoice.direction ? t(`ui.inv.direction.${invoice.direction}`) : t("ui.inv.direction.unknown"));
         cell(row, party(invoice.partner));
         cell(row, statusCell(invoice));
@@ -160,10 +175,104 @@
       : t("ui.inv.empty");
   }
 
+  // A forint árfolyama egységenként érkezik (pl. JPY: 100 egység ára).
+  function rateText(money) {
+    if (!money?.rate) return null;
+    const unit = money.rate_unit > 1 ? ` / ${money.rate_unit} ${money.currency}` : "";
+    return `${formatAmount(money.rate)}${unit}`;
+  }
+
+  function amountCell(money) {
+    if (!money) return null;
+    const box = document.createElement("span");
+    box.textContent = money.amount === null ? t("ui.inv.missing") : formatAmount(String(money.amount));
+    if (money.problem) {
+      const note = document.createElement("small");
+      note.className = "problem";
+      note.textContent = strings[`ui.problem.${money.problem}`] ?? money.problem;
+      box.appendChild(note);
+    }
+    return box;
+  }
+
+  function renderPartners(report) {
+    const { partners } = report;
+    partnersTitle.textContent = t("ui.report.partners_title", { currency: report.currency });
+    amountHeader.textContent = t("ui.inv.col.amount", { currency: report.currency });
+    partnersTable.hidden = partners.length === 0;
+    partnersEmpty.hidden = partners.length > 0;
+    partnersBody.replaceChildren(
+      ...partners.map((partner) => {
+        const row = document.createElement("tr");
+        cell(row, partner.name);
+        cell(row, partner.tax_id);
+        cell(row, String(partner.count), "num");
+        cell(row, formatAmount(String(partner.incoming)), "num");
+        cell(row, formatAmount(String(partner.outgoing)), "num");
+        return row;
+      }),
+    );
+    const total = document.createElement("tr");
+    cell(total, t("ui.report.total"));
+    cell(total, "");
+    cell(total, String(partners.reduce((sum, partner) => sum + partner.count, 0)), "num");
+    cell(total, formatAmount(String(report.total_incoming)), "num");
+    cell(total, formatAmount(String(report.total_outgoing)), "num");
+    partnersFoot.replaceChildren(partners.length ? total : "");
+  }
+
+  let chart = null;
+
+  function renderChart(report) {
+    const { months } = report;
+    chartTitle.textContent = t("ui.report.chart_title", { currency: report.currency });
+    chartWrap.hidden = months.length === 0;
+    chartEmpty.hidden = months.length > 0;
+    if (!months.length || typeof Chart === "undefined") return;
+    const labels = months.map((entry) => entry.month);
+    const number = (value) => value.toLocaleString(locale);
+    const datasets = [
+      { label: t("ui.report.incoming"), data: months.map((entry) => entry.incoming), borderColor: "#067647", backgroundColor: "#067647" },
+      { label: t("ui.report.outgoing"), data: months.map((entry) => entry.outgoing), borderColor: "#b42318", backgroundColor: "#b42318" },
+    ].map((dataset) => ({ ...dataset, tension: 0.2, pointRadius: 4 }));
+    if (chart) {
+      chart.data.labels = labels;
+      chart.data.datasets = datasets;
+      chart.update();
+      return;
+    }
+    chart = new Chart(chartCanvas, {
+      type: "line",
+      data: { labels, datasets },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: { mode: "index", intersect: false },
+        scales: {
+          x: { title: { display: true, text: t("ui.report.axis_month") } },
+          y: {
+            beginAtZero: true,
+            title: { display: true, text: report.currency },
+            ticks: { callback: (value) => number(value) },
+          },
+        },
+        plugins: {
+          legend: { position: "bottom" },
+          tooltip: { callbacks: { label: (item) => `${item.dataset.label}: ${number(item.parsed.y)} ${report.currency}` } },
+        },
+      },
+    });
+  }
+
   async function refreshInvoices() {
     try {
-      const response = await fetch("/api/invoices");
-      if (response.ok) renderInvoices(await response.json());
+      const [invoicesResponse, reportResponse] = await Promise.all([fetch("/api/invoices"), fetch("/api/report")]);
+      const report = reportResponse.ok ? await reportResponse.json() : null;
+      if (invoicesResponse.ok) renderInvoices(await invoicesResponse.json(), report);
+      if (report) {
+        renderChart(report);
+        renderPartners(report);
+      }
     } catch (error) {
       // A következő frissítés újra próbálkozik.
     }

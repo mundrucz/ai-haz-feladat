@@ -6,6 +6,7 @@ from app.db import Database
 from app.i18n import Translator
 from app.invoices import InvoiceRepository
 from app.jobs import JobTracker
+from app.report import ReportService
 from app.upload import UploadService
 
 
@@ -35,3 +36,7 @@ def get_invoice_repository(request: Request) -> InvoiceRepository:
 
 def get_upload_service(request: Request) -> UploadService:
     return request.app.state.upload_service
+
+
+def get_report_service(request: Request) -> ReportService:
+    return request.app.state.report_service
