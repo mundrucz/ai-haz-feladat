@@ -88,4 +88,7 @@ main { max-width: 1500px; }
 .inv-ok { color: #067647; font-weight: 600; }
 .inv-needs_review { color: #b54708; font-weight: 600; }
 .invoices .notes { margin: 0.25rem 0 0; padding-left: 1.1rem; font-weight: 400; font-size: 0.85em; color: var(--text, #1f2933); }
+.invoices .problem { display: block; color: #b54708; font-size: 0.85em; }
+.chart-wrap { position: relative; height: 340px; }
+tfoot td { font-weight: 700; border-top: 2px solid #b8c2cc; }
 
