@@ -16,6 +16,17 @@ Számlafeldolgozó webalkalmazás: PDF számlák feltöltése, adatkinyerés, MN
 - Tesztek: pytest
 - Futtatás: `docker compose up --build`, a Dockeren kívül semmi lokális függőség
 
+## Általánosság: nyelv és pénznem (alapelv)
+
+- Az alkalmazás bármilyen nyelvű és pénznemű számlán működik: a kinyerést az LLM végzi. Az ellenőrzésekhez használt adatfájlok (hónapnevek, ÁFA-címkék, devizajelek) csak a felvett nyelveket és devizákat ismerik: jelenleg a `FELADAT.md` nyelveit és devizáit. Bővítés csak adatfájllal (`app/extraction/resources/languages/`, `resources/currencies.json`), kódot nem kell módosítani. Ami nincs felvéve, az kinyerhető marad, csak az ellenőrzés gyengébb.
+- **Tilos** a kódba égetett nyelv- vagy pénznem-felsorolás (`if currency in ("EUR", "USD", ...)`, nyelvenként külön kódág, beégetett devizalista az MNB-lekérdezésben, a validációban vagy a teszt-elvárásokban). A felsorolás helye kizárólag az adatfájl.
+- **Pénznem:** az ISO 4217 kódot kell kinyerni/normalizálni (kód, szimbólum, név alapján; az LLM bármely háromjegyű kódot adhat, a devizafájl jeleit és neveit az összevetéshez használjuk), a támogatott devizák körét az MNB `GetCurrencies` válasza adja, nem a kód. Az árfolyam-lekérdezés a számlákon ténylegesen előforduló devizákra dinamikusan megy; az `unit` egységet mindig figyelembe vesszük. Ha az MNB nem jegyez egy devizát, az a számla hibája/figyelmeztetése (érthető ok), nem az alkalmazásé.
+- **Nyelv:** nincs nyelvfelismerés-függőség és nincs nyelvenkénti elágazás. A nyelvenkénti adatfájlokat az ellenőrzések egyszerre, nyelvtől függetlenül használják. Ismeretlen nyelvű számla attól még feldolgozható.
+- **Számok:** a tizedes- és ezreselválasztót a szám szerkezetéből és a számlán belüli konzisztenciából határozzuk meg (`1 234,56`, `1.234,56`, `1,234.56`, `1'234.56` stb.), nem nyelvből.
+- **Dátumok:** a kimenet mindig ISO 8601 (`ÉÉÉÉ-HH-NN`). A dátumot az LLM adja ISO-ban; ellenőrizzük, hogy a szövegben bármely alakban szerepel-e (grounding), valós-e, észszerű tartományba esik-e, és a sorrend (kiállítás ≤ határidő, teljesítés ≤ határidő) stimmel-e.
+- **Saját cég felismerése** nyelvtől függetlenül: a kinyert fél adószáma vagy neve egyezik (formátum-normalizálva) a beállított adószámmal, EU VAT-tal vagy névvel.
+- A tesztek is általánosak: legyenek köztük a nem felvett nyelvek és devizák (pl. JPY, CHF, SEK, CZK, RON, nem latin írásrendszer). Elvárás: a normalizálás, a grounding és a validáció elfogadja őket.
+
 ## Architektúra-elvek (bővíthetőség, skálázhatóság)
 
 - **Önálló modulok:** minden modul (pdf, kinyerés, validáció, árfolyam, riport, tárolás) önmagában is használható és tesztelhető; nincs globális állapot, rejtett importfüggés vagy közvetlen környezeti változó olvasás a modulok mélyén.
