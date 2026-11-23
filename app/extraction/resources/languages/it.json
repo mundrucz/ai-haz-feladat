@@ -1,0 +1,19 @@
+{
+  "months": [
+    ["gennaio"],
+    ["febbraio"],
+    ["marzo"],
+    ["aprile"],
+    ["maggio"],
+    ["giugno"],
+    ["luglio"],
+    ["agosto"],
+    ["settembre"],
+    ["ottobre"],
+    ["novembre"],
+    ["dicembre"]
+  ],
+  "labels": {
+    "vat_total": ["imposta", "totale iva", "importo iva", "iva totale", "totale imposta", "di cui iva", "imposta iva", "iva dovuta", "totale tasse", "importo imposta"]
+  }
+}

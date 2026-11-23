@@ -26,3 +26,7 @@ class ProcessingError(AppError):
 
     code = "processing_error"
     status_code = 422
+
+    def __init__(self, message: str, *, code: str | None = None, fields: tuple[str, ...] = ()) -> None:
+        super().__init__(message, code=code)
+        self.fields = fields

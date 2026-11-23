@@ -1,0 +1,19 @@
+{
+  "months": [
+    ["januar", "jänner"],
+    ["februar", "feber"],
+    ["märz"],
+    ["april"],
+    ["mai"],
+    ["juni"],
+    ["juli"],
+    ["august"],
+    ["september"],
+    ["oktober"],
+    ["november"],
+    ["dezember"]
+  ],
+  "labels": {
+    "vat_total": ["mwst", "mehrwertsteuer", "umsatzsteuer", "ust", "mwst.", "ust.", "summe mwst", "summe ust", "gesamt mwst", "enthaltene mwst", "enthaltene umsatzsteuer", "steuerbetrag", "steuer", "mwst betrag", "zuzüglich mwst", "zzgl. mwst", "zzgl mwst", "zzgl. ust", "mwst gesamt"]
+  }
+}

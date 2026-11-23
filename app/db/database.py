@@ -1,77 +1,86 @@
+"""Aszinkron SQLite-hozzáférés SQLAlchemy-vel. A séma indításkor az Alembic-migrációkból épül fel."""
+
 import logging
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Any
 
-import aiosqlite
+from alembic import command
+from alembic.config import Config
+from sqlalchemy import Connection, event, text
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.pool import NullPool
 
 logger = logging.getLogger(__name__)
 
-# (verzió, SQL) párok; új séma-változás új, növekvő verzióként kerül ide.
-Migration = tuple[int, str]
-MIGRATIONS: list[Migration] = [
-    (
-        1,
-        """
-        CREATE TABLE documents (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            content_hash TEXT NOT NULL UNIQUE,
-            original_name TEXT NOT NULL,
-            size_bytes INTEGER NOT NULL,
-            status TEXT NOT NULL CHECK (status IN ('pending', 'processing', 'done', 'failed')),
-            error_code TEXT,
-            error_message TEXT,
-            page_count INTEGER,
-            text TEXT,
-            uploaded_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            processed_at TEXT
-        );
-        CREATE INDEX idx_documents_status ON documents (status);
-        """,
-    ),
-]
+MIGRATIONS_DIR = Path(__file__).parent / "migrations"
+_IMMEDIATE = "sqlite_begin_immediate"
+
+
+def _on_connect(dbapi_connection: Any, _record: Any) -> None:
+    # A tranzakciót nem a meghajtó indítja, hanem az `_on_begin`: így a migráció (DDL) is egy tranzakcióban fut,
+    # és kérhető `BEGIN IMMEDIATE`.
+    dbapi_connection.isolation_level = None
+    cursor = dbapi_connection.cursor()
+    cursor.execute("PRAGMA foreign_keys = ON")
+    cursor.execute("PRAGMA busy_timeout = 5000")
+    cursor.execute("PRAGMA journal_mode = WAL")
+    cursor.close()
+
+
+def _on_begin(conn: Connection) -> None:
+    conn.exec_driver_sql("BEGIN IMMEDIATE" if conn.get_execution_options().get(_IMMEDIATE) else "BEGIN")
+
+
+def _upgrade_to_head(connection: Connection) -> None:
+    config = Config()
+    config.set_main_option("script_location", str(MIGRATIONS_DIR))
+    config.attributes["connection"] = connection
+    command.upgrade(config, "head")
 
 
 class Database:
-    """Aszinkron SQLite-hozzáférés: minden művelet saját kapcsolatot kap, így a párhuzamos feldolgozás biztonságos."""
+    """Minden munkamenet saját kapcsolatot kap (`NullPool`), így a párhuzamos feldolgozás biztonságos."""
 
     def __init__(self, path: Path) -> None:
         self.path = path
+        self.engine = create_async_engine(f"sqlite+aiosqlite:///{path}", poolclass=NullPool)
+        event.listen(self.engine.sync_engine, "connect", _on_connect)
+        event.listen(self.engine.sync_engine, "begin", _on_begin)
+        self._sessions = async_sessionmaker(self.engine, expire_on_commit=False)
 
     @asynccontextmanager
-    async def connect(self) -> AsyncIterator[aiosqlite.Connection]:
-        conn = await aiosqlite.connect(self.path)
-        conn.row_factory = aiosqlite.Row
-        try:
-            await conn.execute("PRAGMA foreign_keys = ON")
-            await conn.execute("PRAGMA busy_timeout = 5000")
-            yield conn
-        finally:
-            await conn.close()
+    async def session(self) -> AsyncIterator[AsyncSession]:
+        """Munkamenet olvasáshoz; a nem véglegesített változások a végén elvesznek."""
+        async with self._sessions() as session:
+            yield session
 
-    async def init(self, migrations: Sequence[Migration] = MIGRATIONS) -> None:
+    @asynccontextmanager
+    async def transaction(self, *, immediate: bool = False) -> AsyncIterator[AsyncSession]:
+        """Írási munkamenet: a végén véglegesít, kivételnél visszagörget.
+
+        `immediate=True` esetén az írási zárat már a tranzakció elején megszerzi, így az ellenőrzés és az írás
+        között más nem írhat (párhuzamos mentésnél sincs versenyhelyzet).
+        """
+        async with self._sessions() as session, session.begin():
+            await session.connection(execution_options={_IMMEDIATE: immediate})
+            yield session
+
+    async def init(self) -> None:
+        """A sémát a legutóbbi Alembic-revízióra hozza; a migráció és a verzió rögzítése egy tranzakció."""
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        async with self.connect() as conn:
-            await conn.execute("PRAGMA journal_mode = WAL")
-            await conn.execute(
-                "CREATE TABLE IF NOT EXISTS schema_migrations "
-                "(version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)"
-            )
-            async with conn.execute("SELECT version FROM schema_migrations") as cursor:
-                applied = {row["version"] async for row in cursor}
-            for version, sql in sorted(migrations):
-                if version in applied:
-                    continue
-                await conn.executescript(sql)
-                await conn.execute("INSERT INTO schema_migrations (version) VALUES (?)", (version,))
-                await conn.commit()
-                logger.info("migration applied", extra={"version": version})
+        async with self.engine.begin() as conn:
+            await conn.run_sync(_upgrade_to_head)
 
     async def ping(self) -> bool:
         try:
-            async with self.connect() as conn:
-                await conn.execute("SELECT 1")
+            async with self.engine.connect() as conn:
+                await conn.execute(text("SELECT 1"))
             return True
         except Exception:
             logger.exception("database ping failed")
             return False
+
+    async def close(self) -> None:
+        await self.engine.dispose()

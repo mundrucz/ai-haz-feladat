@@ -1,0 +1,19 @@
+{
+  "months": [
+    ["january"],
+    ["february"],
+    ["march"],
+    ["april"],
+    ["may"],
+    ["june"],
+    ["july"],
+    ["august"],
+    ["september"],
+    ["october"],
+    ["november"],
+    ["december"]
+  ],
+  "labels": {
+    "vat_total": ["total vat", "vat total", "vat amount", "total tax", "tax total", "sales tax", "tax amount", "total gst", "gst", "vat", "total taxes", "vat value", "tax value", "value added tax", "sales tax total", "total sales tax", "vat at", "output vat"]
+  }
+}

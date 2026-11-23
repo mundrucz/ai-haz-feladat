@@ -1,0 +1,19 @@
+{
+  "months": [
+    ["janvier"],
+    ["février"],
+    ["mars"],
+    ["avril"],
+    ["mai"],
+    ["juin"],
+    ["juillet"],
+    ["août"],
+    ["septembre"],
+    ["octobre"],
+    ["novembre"],
+    ["décembre"]
+  ],
+  "labels": {
+    "vat_total": ["total tva", "montant tva", "tva", "taxe", "montant de la tva", "dont tva", "total de la tva", "tva totale", "tva collectée", "tva collectee", "montant taxe", "total taxe"]
+  }
+}

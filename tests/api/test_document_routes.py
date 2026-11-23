@@ -1,7 +1,7 @@
 import asyncio
 
 import pytest
-from pdfs import make_blank_pdf, make_encrypted_pdf, make_pdf
+from pdfs import invoice_text, make_blank_pdf, make_encrypted_pdf, make_pdf
 
 
 def upload(client, *files):
@@ -19,8 +19,12 @@ def documents(client):
     return client.get("/api/documents").json()
 
 
-def test_upload_processes_pdf_and_lists_it(client, app):
-    response = upload(client, ("szamla.pdf", make_pdf("Számla 1")))
+def invoices(client):
+    return client.get("/api/invoices").json()["invoices"]
+
+
+def test_successful_upload_stores_only_the_invoice_data(client, app, settings):
+    response = upload(client, ("szamla.pdf", make_pdf(invoice_text())))
 
     assert response.status_code == 200
     result = response.json()["results"][0]
@@ -28,45 +32,43 @@ def test_upload_processes_pdf_and_lists_it(client, app):
     assert result["error"] is None
 
     wait_until_processed(client, app)
-    listing = documents(client)
-    doc = listing["documents"][0]
-    assert doc["filename"] == "szamla.pdf"
-    assert doc["status"] == "done"
-    assert doc["page_count"] == 1
-    assert doc["text_chars"] > 0
-    assert listing["counts"] == {"pending": 0, "processing": 0, "done": 1, "failed": 0}
+    assert documents(client) == {"documents": [], "counts": {"pending": 0, "processing": 0, "failed": 0}}
+    (invoice,) = invoices(client)
+    assert invoice["filename"] == "szamla.pdf"
+    assert not list(settings.database_path.parent.glob("**/*.pdf"))
 
 
-def test_same_content_is_not_stored_twice_even_with_other_name(client, app):
-    data = make_pdf("ugyanaz")
-    first = upload(client, ("a.pdf", data)).json()["results"][0]
+def test_same_content_is_not_processed_twice_even_with_other_name(client, app):
+    data = make_pdf(invoice_text("ugyanaz-1"))
+    upload(client, ("a.pdf", data))
     wait_until_processed(client, app)
 
     second = upload(client, ("masik-nev.pdf", data)).json()["results"][0]
 
     assert second["outcome"] == "duplicate"
-    assert second["document_id"] == first["document_id"]
-    assert len(documents(client)["documents"]) == 1
+    wait_until_processed(client, app)
+    assert len(invoices(client)) == 1
 
 
-def test_duplicates_within_one_batch_create_one_document(client, app):
-    data = make_pdf("köteg")
+def test_duplicates_within_one_batch_create_one_invoice(client, app):
+    data = make_pdf(invoice_text())
 
     results = upload(client, *[(f"{i}.pdf", data) for i in range(5)]).json()["results"]
 
     outcomes = sorted(r["outcome"] for r in results)
     assert outcomes == ["accepted"] + ["duplicate"] * 4
     wait_until_processed(client, app)
-    assert len(documents(client)["documents"]) == 1
+    assert len(invoices(client)) == 1
 
 
-def test_bad_files_do_not_block_good_ones(client, app):
+def test_bad_files_are_reported_as_errors_and_nothing_is_stored(client, app):
     files = [
-        ("jo.pdf", make_pdf("rendes számla")),
+        ("jo.pdf", make_pdf(invoice_text())),
         ("nem-pdf.pdf", b"nem pdf tartalom"),
         ("jelszavas.pdf", make_encrypted_pdf()),
         ("ures-oldal.pdf", make_blank_pdf()),
         ("serult.pdf", make_pdf("x")[:200]),
+        ("level.pdf", make_pdf("Ez csak egy levél, nincs benne semmi.")),
     ]
 
     results = upload(client, *files).json()["results"]
@@ -74,12 +76,27 @@ def test_bad_files_do_not_block_good_ones(client, app):
     wait_until_processed(client, app)
 
     by_name = {d["filename"]: d for d in documents(client)["documents"]}
-    assert by_name["jo.pdf"]["status"] == "done"
+    assert "jo.pdf" not in by_name
     assert by_name["nem-pdf.pdf"]["error"]["code"] == "not_a_pdf"
     assert by_name["jelszavas.pdf"]["error"]["code"] == "password_protected"
     assert by_name["ures-oldal.pdf"]["error"]["code"] == "no_text"
     assert by_name["serult.pdf"]["status"] == "failed"
+    assert by_name["level.pdf"]["error"]["code"] == "no_invoice_found"
     assert by_name["nem-pdf.pdf"]["error"]["message"]
+    assert [i["filename"] for i in invoices(client)] == ["jo.pdf"]
+
+
+def test_invoice_with_missing_field_is_an_error_and_is_not_stored(client, app):
+    text = invoice_text().replace("Fizetési határidő: 2026.02.11.\n", "")
+
+    upload(client, ("hianyos.pdf", make_pdf(text)))
+    wait_until_processed(client, app)
+
+    (job,) = documents(client)["documents"]
+    assert job["status"] == "failed"
+    assert job["error"]["code"] == "incomplete_data"
+    assert job["error"]["fields"] == ["due_date"]
+    assert invoices(client) == []
 
 
 def test_reuploading_failed_file_reprocesses_it(client, app):
@@ -121,7 +138,7 @@ def test_upload_without_files_is_a_clear_client_error(client):
 
 
 def test_listing_can_be_filtered_by_ids(client, app):
-    first = upload(client, ("a.pdf", make_pdf("a"))).json()["results"][0]["document_id"]
+    first = upload(client, ("a.pdf", make_blank_pdf())).json()["results"][0]["document_id"]
     upload(client, ("b.pdf", make_pdf("b")))
     wait_until_processed(client, app)
 
@@ -144,12 +161,21 @@ def test_index_page_contains_upload_ui(client):
     assert "/static/app.js" in html
 
 
+def test_index_page_has_hidden_leave_warning_and_translated_text(client):
+    html = client.get("/").text
+
+    assert 'id="upload-warning"' in html
+    assert "elvesznek" in html
+    assert "ui.upload.leave_warning" in html
+
+
 @pytest.mark.parametrize("count", [30])
 def test_many_files_are_all_processed(client, app, count):
-    files = [(f"{i}.pdf", make_pdf(f"szamla {i}")) for i in range(count)]
+    files = [(f"{i}.pdf", make_pdf(invoice_text(f"NW-2026-{i:04d}"))) for i in range(count)]
 
     results = upload(client, *files).json()["results"]
     wait_until_processed(client, app)
 
     assert all(r["outcome"] == "accepted" for r in results)
-    assert documents(client)["counts"]["done"] == count
+    assert len(invoices(client)) == count
+    assert documents(client)["documents"] == []

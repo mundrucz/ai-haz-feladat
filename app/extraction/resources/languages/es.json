@@ -1,0 +1,19 @@
+{
+  "months": [
+    ["enero"],
+    ["febrero"],
+    ["marzo"],
+    ["abril"],
+    ["mayo"],
+    ["junio"],
+    ["julio"],
+    ["agosto"],
+    ["septiembre", "setiembre"],
+    ["octubre"],
+    ["noviembre"],
+    ["diciembre"]
+  ],
+  "labels": {
+    "vat_total": ["iva", "total iva", "importe iva", "cuota iva", "cuota", "impuestos", "impuesto", "total impuestos", "importe de iva", "iva incluido", "iva total", "cuota de iva", "importe del iva", "igic", "total cuota"]
+  }
+}

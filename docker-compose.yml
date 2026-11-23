@@ -8,7 +8,6 @@ services:
         required: false
     environment:
       DATABASE_PATH: /app/data/app.db
-      UPLOAD_DIR: /app/data/uploads
     volumes:
       - app-data:/app/data
     restart: unless-stopped

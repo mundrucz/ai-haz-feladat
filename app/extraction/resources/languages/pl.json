@@ -1,0 +1,19 @@
+{
+  "months": [
+    ["styczeń", "stycznia"],
+    ["luty", "lutego"],
+    ["marzec", "marca"],
+    ["kwiecień", "kwietnia"],
+    ["maj", "maja"],
+    ["czerwiec", "czerwca"],
+    ["lipiec", "lipca"],
+    ["sierpień", "sierpnia"],
+    ["wrzesień", "września"],
+    ["październik", "października"],
+    ["listopad", "listopada"],
+    ["grudzień", "grudnia"]
+  ],
+  "labels": {
+    "vat_total": ["podatek vat", "kwota vat", "razem vat", "vat razem", "podatek", "w tym vat", "kwota podatku", "suma vat", "wartość vat", "wartosc vat", "podatek od towarów i usług", "razem podatek"]
+  }
+}

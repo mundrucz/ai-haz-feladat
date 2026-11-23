@@ -1,18 +1,21 @@
-import asyncio
+import hashlib
 import logging
 from collections.abc import Iterable
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import PurePath
 
-from app.documents import AddOutcome, DocumentRepository
+from app.invoices import InvoiceRepository
+from app.jobs import AddOutcome, JobTracker
 from app.processing import DocumentProcessor
-from app.storage import FileStore, hash_bytes
 
 logger = logging.getLogger(__name__)
 
 MAX_NAME_LENGTH = 255
-STORE_CONCURRENCY = 8
+
+
+def hash_bytes(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
 
 
 class UploadOutcome(StrEnum):
@@ -25,7 +28,7 @@ class UploadOutcome(StrEnum):
 class UploadResult:
     filename: str
     outcome: UploadOutcome
-    document_id: int | None = None
+    job_id: int | None = None
     error_code: str | None = None
 
 
@@ -35,20 +38,20 @@ def _display_name(filename: str) -> str:
 
 
 class UploadService:
-    """Fogadja a feltöltött fájlokat: mentés, duplikáció-szűrés, feldolgozás sorba állítása.
+    """Fogadja a feltöltött fájlokat: duplikáció-szűrés, majd a feldolgozás sorba állítása.
 
-    A fájlnevet csak megjelenítésre tároljuk, a lemezre a tartalom hash-e kerül.
+    A PDF-et nem tároljuk: csak a tartalom hash-e és a megjelenítési fájlnév marad meg a kinyert adat mellett.
     """
 
     def __init__(
         self,
-        repository: DocumentRepository,
-        store: FileStore,
+        jobs: JobTracker,
+        invoices: InvoiceRepository,
         processor: DocumentProcessor,
         max_bytes: int,
     ) -> None:
-        self._repository = repository
-        self._store = store
+        self._jobs = jobs
+        self._invoices = invoices
         self._processor = processor
         self._max_bytes = max_bytes
 
@@ -58,24 +61,22 @@ class UploadService:
             return UploadResult(name, UploadOutcome.REJECTED, error_code="empty_file")
         if len(data) > self._max_bytes:
             return UploadResult(name, UploadOutcome.REJECTED, error_code="file_too_large")
+        content_hash = hash_bytes(data)
+        # Előbb a folyamatban lévők közé vesszük fel (szinkron), így a DB-vizsgálat alatt sem csúszhat át duplikátum.
+        job, outcome = self._jobs.add(content_hash, name, len(data))
+        if outcome is AddOutcome.DUPLICATE:
+            return UploadResult(name, UploadOutcome.DUPLICATE, job.id)
         try:
-            content_hash = hash_bytes(data)
-            if not await self._store.exists(content_hash):
-                await self._store.save(content_hash, data)
-            document, outcome = await self._repository.add(content_hash, name, len(data))
+            stored = await self._invoices.exists(content_hash)
         except Exception:
             logger.exception("upload failed", extra={"upload_name": name})
-            return UploadResult(name, UploadOutcome.REJECTED, error_code="storage_error")
-        if outcome is AddOutcome.DUPLICATE:
-            return UploadResult(name, UploadOutcome.DUPLICATE, document.id)
-        self._processor.enqueue(document.id)
-        return UploadResult(name, UploadOutcome.ACCEPTED, document.id)
+            self._jobs.finish(job.id)
+            return UploadResult(name, UploadOutcome.REJECTED, error_code="unexpected_error")
+        if stored:
+            self._jobs.finish(job.id)
+            return UploadResult(name, UploadOutcome.DUPLICATE)
+        self._processor.enqueue(job.id, data)
+        return UploadResult(name, UploadOutcome.ACCEPTED, job.id)
 
     async def ingest_many(self, files: Iterable[tuple[str, bytes]]) -> list[UploadResult]:
-        semaphore = asyncio.Semaphore(STORE_CONCURRENCY)
-
-        async def run(filename: str, data: bytes) -> UploadResult:
-            async with semaphore:
-                return await self.ingest(filename, data)
-
-        return list(await asyncio.gather(*(run(name, data) for name, data in files)))
+        return [await self.ingest(name, data) for name, data in files]
