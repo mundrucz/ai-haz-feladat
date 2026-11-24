@@ -226,6 +226,39 @@ def test_clear_failed_endpoint_empties_the_failed_list_only(client, app):
     assert app.state.jobs.get(waiting.id) is not None
 
 
+def test_delete_invoices_removes_invoices_and_failed_files_and_allows_reupload(client, app):
+    data = make_pdf(invoice_text("torles-1"))
+    upload(client, ("jo.pdf", data), ("hibas.pdf", make_blank_pdf()))
+    wait_until_processed(client, app)
+    assert len(invoices(client)) == 1
+    assert len(documents(client)["documents"]) == 1
+
+    response = client.delete("/api/invoices")
+
+    assert response.json() == {"deleted": 1, "cleared_failed": 1}
+    assert invoices(client) == []
+    assert documents(client)["documents"] == []
+    assert upload(client, ("jo.pdf", data)).json()["results"][0]["outcome"] == "accepted"
+    wait_until_processed(client, app)
+    assert len(invoices(client)) == 1
+
+
+def test_delete_invoices_with_nothing_stored_is_a_noop(client):
+    assert client.delete("/api/invoices").json() == {"deleted": 0, "cleared_failed": 0}
+
+
+def test_delete_invoices_is_refused_while_processing_is_active(client, app):
+    upload(client, ("jo.pdf", make_pdf(invoice_text("torles-2"))))
+    wait_until_processed(client, app)
+    app.state.jobs.add("h-active", "var.pdf", 1)
+
+    response = client.delete("/api/invoices")
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "processing_active"
+    assert len(invoices(client)) == 1
+
+
 def test_cancel_endpoint_for_unknown_upload_cancels_nothing(client):
     assert client.post("/api/documents/uploads/nincs-ilyen/cancel").json() == {"cancelled": 0}
 

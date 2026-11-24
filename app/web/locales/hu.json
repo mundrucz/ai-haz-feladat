@@ -1,6 +1,5 @@
 {
   "app.title": "Számlafeldolgozó",
-  "app.subtitle": "Cash-flow kimutatás feltöltött számlákból",
   "home.company": "Saját cég",
   "home.tax_number": "Adószám",
   "home.report_currency": "Kimutatás pénzneme",
@@ -30,6 +29,10 @@
   "ui.inv.title": "Kinyert számlák",
   "ui.inv.empty": "Még nincs sikeresen kinyert számla.",
   "ui.inv.summary": "Összesen {total}: {ok} rendben, {review} ellenőrzendő.",
+  "ui.inv.delete": "Összes számla törlése",
+  "ui.inv.delete_confirm": "Biztosan törlöd az összes ({total} db) kinyert számlát és a hibás fájlok listáját? Ez nem vonható vissza, a fájlokat újra fel kell tölteni.",
+  "ui.inv.deleted": "Törölve: {deleted} számla.",
+  "ui.inv.delete_failed": "A törlés nem sikerült, próbáld újra.",
   "ui.inv.col.number": "Számlaszám",
   "ui.inv.col.seller": "Kiállító",
   "ui.inv.col.buyer": "Vevő",
@@ -128,5 +131,6 @@
   "error.llm_invalid_response": "Az LLM válasza nem használható (nem JSON, séma-eltérés vagy nem a dokumentumból való adat)",
   "error.llm_error": "Az LLM-hívás sikertelen volt.",
   "error.no_files": "Nem érkezett fájl.",
-  "error.invalid_ids": "Érvénytelen azonosító lista."
+  "error.invalid_ids": "Érvénytelen azonosító lista.",
+  "error.processing_active": "Feldolgozás folyamatban van, a törlés várjon, amíg befejeződik."
 }
