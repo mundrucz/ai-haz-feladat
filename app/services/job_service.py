@@ -2,13 +2,17 @@
 
 Szándékosan csak memóriában él: a feltöltött PDF-et és a hibás feldolgozás adatait nem tároljuk.
 Sikeres feldolgozás után a bejegyzés eltűnik (az adat a számlák között jelenik meg), a hibás
-a hibával együtt látszik, amíg az alkalmazás fut vagy a fájlt újra fel nem töltik.
+a hibával együtt látszik, amíg az alkalmazás fut vagy a fájlt újra fel nem töltik. A feldolgozásba
+be sem kerülő fájlok (üres, túl nagy, duplikátum) hibás bejegyzésként, korlátos számban megmaradnak.
 """
 
+from collections import deque
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
+
+MAX_REJECTIONS = 500
 
 
 class JobStatus(StrEnum):
@@ -46,6 +50,7 @@ class JobTracker:
     def __init__(self) -> None:
         self._jobs: dict[int, Job] = {}
         self._by_hash: dict[str, int] = {}
+        self._rejections: deque[int] = deque()
         self._next_id = 1
 
     def add(self, content_hash: str, filename: str, size_bytes: int) -> tuple[Job, AddOutcome]:
@@ -57,6 +62,7 @@ class JobTracker:
                 return job, AddOutcome.DUPLICATE
             job.status = JobStatus.PENDING
             job.filename = filename
+            job.created_at = _now()
             job.error_code = job.error_message = None
             job.error_fields = ()
             return job, AddOutcome.REQUEUED
@@ -86,6 +92,20 @@ class JobTracker:
         if job is not None:
             job.status = JobStatus.FAILED
             job.error_code, job.error_message, job.error_fields = code, message, fields
+
+    def record_rejection(self, filename: str, size_bytes: int, code: str) -> Job:
+        """Feldolgozásba be sem kerülő fájl (üres, túl nagy, duplikátum) naplózása, hogy az oka látszódjon.
+
+        Nem része a tartalom szerinti nyilvántartásnak, ezért nem akadályozza a fájl későbbi feltöltését;
+        a lista korlátos, a legrégebbi bejegyzések kiesnek.
+        """
+        job = Job(self._next_id, "", filename, size_bytes, JobStatus.FAILED, error_code=code)
+        self._next_id += 1
+        self._jobs[job.id] = job
+        self._rejections.append(job.id)
+        while len(self._rejections) > MAX_REJECTIONS:
+            self._jobs.pop(self._rejections.popleft(), None)
+        return job
 
     def finish(self, job_id: int) -> None:
         job = self._jobs.pop(job_id, None)

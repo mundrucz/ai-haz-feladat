@@ -59,10 +59,9 @@ h2 { margin: 0 0 0.75rem; font-size: 1.1rem; }
   font-size: 1rem;
   cursor: pointer;
 }
-.button:hover { filter: brightness(1.1); }
+.button:hover:not(:disabled) { filter: brightness(1.1); }
+.button:disabled { background: #c4cbd3; color: #6b7785; cursor: not-allowed; }
 
-.issues { margin: 0.5rem 0 0; padding-left: 1.2rem; color: #b42318; }
-.issues:empty { display: none; }
 
 .warning {
   margin: 0.5rem 0 0;
@@ -82,6 +81,9 @@ th.num, td.num { text-align: right; }
 .status-pending, .status-processing { color: #b54708; }
 
 main { max-width: 1500px; }
+.scroll-wrap { overflow-y: auto; }
+.scroll-wrap thead th { position: sticky; top: 0; z-index: 1; background: var(--card); box-shadow: 0 1px 0 #e4e7eb; }
+.status-excluded { color: #b54708; }
 .invoices td { vertical-align: top; }
 .invoices .sub { display: block; color: var(--muted); font-size: 0.85em; }
 .invoices .missing { color: var(--muted); }
@@ -90,5 +92,8 @@ main { max-width: 1500px; }
 .invoices .notes { margin: 0.25rem 0 0; padding-left: 1.1rem; font-weight: 400; font-size: 0.85em; color: var(--text, #1f2933); }
 .invoices .problem { display: block; color: #b54708; font-size: 0.85em; }
 .chart-wrap { position: relative; height: 340px; }
-tfoot td { font-weight: 700; border-top: 2px solid #b8c2cc; }
+.partners th, .partners td { white-space: nowrap; }
+.partners tbody th { text-align: left; }
+.partners .total { border-left: 2px solid #b8c2cc; font-weight: 700; }
+.partners .sub { display: block; color: var(--muted); font-size: 0.85em; font-weight: 400; }
 

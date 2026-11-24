@@ -17,7 +17,6 @@
   </div>
   <p id="upload-status" class="muted" role="status"></p>
   <p id="upload-warning" class="warning" role="alert" hidden>{{ t("ui.upload.leave_warning") }}</p>
-  <ul id="upload-issues" class="issues"></ul>
 </section>
 
 <section class="card">
@@ -32,18 +31,9 @@
   <h2 id="partners-title"></h2>
   <p id="partners-empty" class="muted" role="status">{{ t("ui.report.partners_empty") }}</p>
   <div class="table-wrap">
-    <table id="partners-table" hidden>
-      <thead>
-        <tr>
-          <th>{{ t("ui.report.col.partner") }}</th>
-          <th>{{ t("ui.report.col.tax_id") }}</th>
-          <th class="num">{{ t("ui.report.col.count") }}</th>
-          <th class="num">{{ t("ui.report.col.incoming") }}</th>
-          <th class="num">{{ t("ui.report.col.outgoing") }}</th>
-        </tr>
-      </thead>
+    <table id="partners-table" class="partners" hidden>
+      <thead></thead>
       <tbody></tbody>
-      <tfoot></tfoot>
     </table>
   </div>
 </section>
@@ -51,7 +41,7 @@
 <section class="card">
   <h2>{{ t("ui.inv.title") }}</h2>
   <p id="inv-summary" class="muted" role="status"></p>
-  <div class="table-wrap">
+  <div class="table-wrap scroll-wrap" id="inv-wrap">
     <table id="inv-table" class="invoices" hidden>
       <thead>
         <tr>
@@ -81,13 +71,13 @@
 <section class="card">
   <h2>{{ t("ui.docs.title") }}</h2>
   <p id="docs-summary" class="muted" role="status"></p>
-  <div class="table-wrap">
+  <div class="table-wrap scroll-wrap" id="docs-wrap">
     <table id="docs-table" hidden>
       <thead>
         <tr>
           <th>{{ t("ui.docs.col.file") }}</th>
           <th>{{ t("ui.docs.col.status") }}</th>
-          <th class="num">{{ t("ui.docs.col.size") }}</th>
+          <th>{{ t("ui.docs.col.uploaded") }}</th>
           <th>{{ t("ui.docs.col.message") }}</th>
         </tr>
       </thead>
@@ -97,6 +87,6 @@
 </section>
 
 <script id="i18n-data" type="application/json">{{ strings | tojson }}</script>
-<script src="{{ url_for('static', path='vendor/chart.umd.js') }}" defer></script>
-<script src="{{ url_for('static', path='app.js') }}" defer></script>
+<script src="{{ asset('vendor/chart.umd.js') }}" defer></script>
+<script src="{{ asset('app.js') }}" defer></script>
 {% endblock %}

@@ -55,26 +55,34 @@ class UploadService:
         self._processor = processor
         self._max_bytes = max_bytes
 
+    def _reject(self, name: str, size: int, code: str) -> UploadResult:
+        self._jobs.record_rejection(name, size, code)
+        return UploadResult(name, UploadOutcome.REJECTED, error_code=code)
+
+    def _duplicate(self, name: str, size: int, job_id: int | None = None) -> UploadResult:
+        self._jobs.record_rejection(name, size, "duplicate_file")
+        return UploadResult(name, UploadOutcome.DUPLICATE, job_id)
+
     async def ingest(self, filename: str, data: bytes) -> UploadResult:
         name = _display_name(filename)
         if not data:
-            return UploadResult(name, UploadOutcome.REJECTED, error_code="empty_file")
+            return self._reject(name, 0, "empty_file")
         if len(data) > self._max_bytes:
-            return UploadResult(name, UploadOutcome.REJECTED, error_code="file_too_large")
+            return self._reject(name, len(data), "file_too_large")
         content_hash = hash_bytes(data)
         # Előbb a folyamatban lévők közé vesszük fel (szinkron), így a DB-vizsgálat alatt sem csúszhat át duplikátum.
         job, outcome = self._jobs.add(content_hash, name, len(data))
         if outcome is AddOutcome.DUPLICATE:
-            return UploadResult(name, UploadOutcome.DUPLICATE, job.id)
+            return self._duplicate(name, len(data), job.id)
         try:
             stored = await self._invoices.exists(content_hash)
         except Exception:
             logger.exception("upload failed", extra={"upload_name": name})
             self._jobs.finish(job.id)
-            return UploadResult(name, UploadOutcome.REJECTED, error_code="unexpected_error")
+            return self._reject(name, len(data), "unexpected_error")
         if stored:
             self._jobs.finish(job.id)
-            return UploadResult(name, UploadOutcome.DUPLICATE)
+            return self._duplicate(name, len(data))
         self._processor.enqueue(job.id, data)
         return UploadResult(name, UploadOutcome.ACCEPTED, job.id)
 
