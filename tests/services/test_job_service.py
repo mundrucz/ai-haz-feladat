@@ -17,12 +17,14 @@ def test_failed_job_can_be_requeued_and_loses_its_error():
     job, _ = jobs.add("h1", "a.pdf", 10)
     jobs.claim(job.id)
     jobs.mark_failed(job.id, "no_text", "üres", ("x",))
+    job.created_at = "2000-01-01T00:00:00+00:00"
 
     again, outcome = jobs.add("h1", "uj-nev.pdf", 10)
 
     assert outcome is AddOutcome.REQUEUED
     assert (again.id, again.status, again.filename) == (job.id, JobStatus.PENDING, "uj-nev.pdf")
     assert (again.error_code, again.error_message, again.error_fields) == (None, None, ())
+    assert again.created_at > "2000-01-01T00:00:00+00:00"
 
 
 def test_claim_succeeds_only_once():

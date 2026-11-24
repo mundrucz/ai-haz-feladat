@@ -186,6 +186,12 @@ def test_api_report_is_served(client):
     assert response.json()["invoices"] == []
 
 
+def test_static_assets_are_versioned_so_browsers_do_not_serve_stale_scripts(client):
+    html = client.get("/").text
+    assert "/static/app.js?v=" in html and "/static/style.css?v=" in html
+    assert client.get("/static/app.js?v=1").status_code == 200
+
+
 def test_index_page_serves_vendored_chart_library_and_report_sections(client):
     html = client.get("/").text
     assert 'id="cashflow-chart"' in html and 'id="partners-table"' in html

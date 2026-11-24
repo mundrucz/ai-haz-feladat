@@ -3,6 +3,8 @@
 
   const BATCH_SIZE = 10;
   const POLL_MS = 1500;
+  const VISIBLE_INVOICE_ROWS = 10;
+  const VISIBLE_DOCUMENT_ROWS = 10;
   const strings = JSON.parse(document.getElementById("i18n-data").textContent);
   const t = (key, params = {}) =>
     (strings[key] ?? key).replace(/\{(\w+)\}/g, (_, name) => params[name] ?? "");
@@ -12,12 +14,13 @@
   const pickButton = document.getElementById("pick-button");
   const uploadStatus = document.getElementById("upload-status");
   const uploadWarning = document.getElementById("upload-warning");
-  const uploadIssues = document.getElementById("upload-issues");
   const docsSummary = document.getElementById("docs-summary");
   const docsTable = document.getElementById("docs-table");
   const docsBody = docsTable.querySelector("tbody");
+  const docsWrap = document.getElementById("docs-wrap");
   const invSummary = document.getElementById("inv-summary");
   const invTable = document.getElementById("inv-table");
+  const invWrap = document.getElementById("inv-wrap");
   const invBody = invTable.querySelector("tbody");
   const locale = document.documentElement.lang || undefined;
   const chartTitle = document.getElementById("chart-title");
@@ -28,17 +31,16 @@
   const partnersEmpty = document.getElementById("partners-empty");
   const partnersTable = document.getElementById("partners-table");
   const partnersBody = partnersTable.querySelector("tbody");
-  const partnersFoot = partnersTable.querySelector("tfoot");
+  const partnersHead = partnersTable.querySelector("thead");
   const amountHeader = document.getElementById("amount-header");
 
   const ACTIVE = new Set(["pending", "processing"]);
   let pollTimer = null;
   let uploading = false;
 
-  const formatSize = (bytes) =>
-    bytes >= 1048576
-      ? `${(bytes / 1048576).toFixed(1)} MB`
-      : `${Math.max(1, Math.round(bytes / 1024))} KB`;
+  // A szerver UTC-ben adja az időt; a felhasználó helyi idejében mutatjuk.
+  const formatTime = (iso) =>
+    iso ? new Date(iso).toLocaleString(locale, { dateStyle: "short", timeStyle: "medium" }) : "";
 
   const errorMessage = (error) => {
     if (!error) return "";
@@ -49,35 +51,57 @@
     return (fields.length ? `${base}: ${fields.join(", ")}` : base) + detail;
   };
 
+  let lastDocuments = { documents: [], counts: { pending: 0, processing: 0, failed: 0 } };
+  let lastReport = null;
+
   function renderDocuments(data) {
-    const { documents, counts } = data;
-    docsTable.hidden = documents.length === 0;
+    lastDocuments = data;
+    renderProblems();
+    return data.counts.pending + data.counts.processing > 0;
+  }
+
+  // A feldolgozás állapota: a még nem kész és a sikertelen fájlok, valamint a kinyert, de az összesítésből
+  // (részben) kimaradó számlák (pl. nem elérhető MNB-árfolyam) – mindegyik az okával.
+  function renderProblems() {
+    const { documents, counts } = lastDocuments;
+    const excluded = (lastReport?.invoices ?? []).filter((item) => item.problem);
+    const rows = documents.map((doc) => ({
+      name: doc.filename,
+      status: t(`status.${doc.status}`),
+      statusClass: `status-${doc.status}`,
+      uploaded: formatTime(doc.uploaded_at),
+      reason: errorMessage(doc.error),
+    }));
+    excluded.forEach((item) =>
+      rows.push({
+        name: [item.invoice_number, item.partner?.name].filter(Boolean).join(" – ") || t("ui.inv.missing"),
+        status: t("ui.docs.excluded"),
+        statusClass: "status-excluded",
+        uploaded: "",
+        reason: strings[`ui.problem.${item.problem}`] ?? item.problem,
+      }),
+    );
+    docsTable.hidden = rows.length === 0;
     docsBody.replaceChildren(
-      ...documents.map((doc) => {
+      ...rows.map((entry) => {
         const row = document.createElement("tr");
-        const cells = [
-          doc.filename,
-          t(`status.${doc.status}`),
-          formatSize(doc.size_bytes),
-          errorMessage(doc.error),
-        ];
-        cells.forEach((value, index) => {
+        [entry.name, entry.status, entry.uploaded, entry.reason].forEach((value, index) => {
           const cell = document.createElement("td");
           cell.textContent = value;
-          if (index === 1) cell.className = `status status-${doc.status}`;
-          if (index === 2) cell.className = "num";
+          if (index === 1) cell.className = `status ${entry.statusClass}`;
           row.appendChild(cell);
         });
         return row;
       }),
     );
-    docsSummary.textContent = documents.length
+    docsSummary.textContent = rows.length
       ? t("ui.docs.summary", {
           active: counts.pending + counts.processing,
           failed: counts.failed,
+          excluded: excluded.length,
         })
       : t("ui.docs.empty");
-    return counts.pending + counts.processing > 0;
+    limitHeight(docsWrap, docsBody, VISIBLE_DOCUMENT_ROWS);
   }
 
   // Az összegek szövegként érkeznek (pl. "1234.50"); a pontosságot megtartva csoportosítjuk.
@@ -166,6 +190,7 @@
         return row;
       }),
     );
+    limitHeight(invWrap, invBody, VISIBLE_INVOICE_ROWS);
     invSummary.textContent = invoices.length
       ? t("ui.inv.summary", {
           total: invoices.length,
@@ -173,6 +198,18 @@
           review: counts.needs_review,
         })
       : t("ui.inv.empty");
+  }
+
+  // A sorok magassága változó (megjegyzések, adószám), ezért az utolsó látható sor aljáig mért magasságra korlátozunk;
+  // alacsony ablakban a képernyő 85%-a a határ, hogy a vízszintes görgetősáv is elérhető maradjon.
+  function limitHeight(wrap, body, maxRows) {
+    wrap.style.maxHeight = "";
+    const rows = body.rows;
+    if (rows.length <= maxRows) return;
+    const last = rows[maxRows - 1].getBoundingClientRect().bottom;
+    const height = last - wrap.getBoundingClientRect().top + wrap.scrollTop;
+    const limit = Math.min(Math.ceil(height) + 1, Math.round(window.innerHeight * 0.85));
+    wrap.style.maxHeight = `${limit}px`;
   }
 
   // A forint árfolyama egységenként érkezik (pl. JPY: 100 egység ára).
@@ -195,30 +232,44 @@
     return box;
   }
 
+  // Oszlopok a partnercégek, sorok az Össz bejövő és az Össz kimenő; az utolsó oszlop az összes partner összege.
   function renderPartners(report) {
     const { partners } = report;
     partnersTitle.textContent = t("ui.report.partners_title", { currency: report.currency });
     amountHeader.textContent = t("ui.inv.col.amount", { currency: report.currency });
     partnersTable.hidden = partners.length === 0;
     partnersEmpty.hidden = partners.length > 0;
+
+    const head = document.createElement("tr");
+    head.appendChild(document.createElement("th"));
+    partners.forEach((partner) => {
+      const th = document.createElement("th");
+      th.scope = "col";
+      th.className = "num";
+      th.appendChild(party({ name: partner.name, tax_id: partner.tax_id }) ?? document.createTextNode(t("ui.inv.missing")));
+      head.appendChild(th);
+    });
+    const totalHead = document.createElement("th");
+    totalHead.scope = "col";
+    totalHead.className = "num total";
+    totalHead.textContent = t("ui.report.total");
+    head.appendChild(totalHead);
+    partnersHead.replaceChildren(head);
+
+    const line = (label, key, totalKey) => {
+      const row = document.createElement("tr");
+      const th = document.createElement("th");
+      th.scope = "row";
+      th.textContent = label;
+      row.appendChild(th);
+      partners.forEach((partner) => cell(row, formatAmount(String(partner[key])), "num"));
+      cell(row, formatAmount(String(report[totalKey])), "num total");
+      return row;
+    };
     partnersBody.replaceChildren(
-      ...partners.map((partner) => {
-        const row = document.createElement("tr");
-        cell(row, partner.name);
-        cell(row, partner.tax_id);
-        cell(row, String(partner.count), "num");
-        cell(row, formatAmount(String(partner.incoming)), "num");
-        cell(row, formatAmount(String(partner.outgoing)), "num");
-        return row;
-      }),
+      line(t("ui.report.col.incoming"), "incoming", "total_incoming"),
+      line(t("ui.report.col.outgoing"), "outgoing", "total_outgoing"),
     );
-    const total = document.createElement("tr");
-    cell(total, t("ui.report.total"));
-    cell(total, "");
-    cell(total, String(partners.reduce((sum, partner) => sum + partner.count, 0)), "num");
-    cell(total, formatAmount(String(report.total_incoming)), "num");
-    cell(total, formatAmount(String(report.total_outgoing)), "num");
-    partnersFoot.replaceChildren(partners.length ? total : "");
   }
 
   let chart = null;
@@ -268,6 +319,10 @@
     try {
       const [invoicesResponse, reportResponse] = await Promise.all([fetch("/api/invoices"), fetch("/api/report")]);
       const report = reportResponse.ok ? await reportResponse.json() : null;
+      if (report) {
+        lastReport = report;
+        renderProblems();
+      }
       if (invoicesResponse.ok) renderInvoices(await invoicesResponse.json(), report);
       if (report) {
         renderChart(report);
@@ -293,12 +348,6 @@
     if (active || uploading) pollTimer = setTimeout(refresh, POLL_MS);
   }
 
-  function addIssue(text) {
-    const item = document.createElement("li");
-    item.textContent = text;
-    uploadIssues.appendChild(item);
-  }
-
   async function sendBatch(files) {
     const body = new FormData();
     files.forEach((file) => body.append("files", file, file.name));
@@ -311,33 +360,31 @@
     const files = Array.from(fileList);
     if (!files.length || uploading) return;
     uploading = true;
+    pickButton.disabled = true;
     uploadWarning.hidden = false;
-    uploadIssues.replaceChildren();
     const tally = { accepted: 0, duplicate: 0, rejected: 0 };
     let done = 0;
+    let failed = false;
     refresh();
 
     for (let start = 0; start < files.length; start += BATCH_SIZE) {
       const batch = files.slice(start, start + BATCH_SIZE);
       uploadStatus.textContent = t("ui.upload.progress", { done, total: files.length });
       try {
-        for (const result of await sendBatch(batch)) {
-          tally[result.outcome] += 1;
-          if (result.outcome !== "accepted") {
-            const reason = result.error ? errorMessage(result.error) : t(`outcome.${result.outcome}`);
-            addIssue(`${result.filename}: ${reason}`);
-          }
-        }
+        for (const result of await sendBatch(batch)) tally[result.outcome] += 1;
       } catch (error) {
         tally.rejected += batch.length;
-        addIssue(t("ui.upload.failed"));
+        failed = true;
       }
       done += batch.length;
     }
 
     uploading = false;
+    pickButton.disabled = false;
     uploadWarning.hidden = true;
-    uploadStatus.textContent = t("ui.upload.summary", tally);
+    uploadStatus.textContent = [t("ui.upload.summary", tally), failed ? t("ui.upload.failed") : ""]
+      .filter(Boolean)
+      .join(" ");
     input.value = "";
     refresh();
   }
@@ -364,6 +411,10 @@
     }),
   );
   dropzone.addEventListener("drop", (event) => upload(event.dataTransfer.files));
+  window.addEventListener("resize", () => {
+    limitHeight(invWrap, invBody, VISIBLE_INVOICE_ROWS);
+    limitHeight(docsWrap, docsBody, VISIBLE_DOCUMENT_ROWS);
+  });
 
   refresh();
 })();

@@ -3,6 +3,8 @@ import asyncio
 import pytest
 from pdfs import invoice_text, make_blank_pdf, make_encrypted_pdf, make_pdf
 
+from app.jobs import MAX_REJECTIONS, JobTracker
+
 
 def upload(client, *files):
     payload = [("files", (name, data, "application/pdf")) for name, data in files]
@@ -112,12 +114,13 @@ def test_reuploading_failed_file_reprocesses_it(client, app):
     assert len(documents(client)["documents"]) == 1
 
 
-def test_empty_file_is_rejected_without_record(client):
+def test_empty_file_is_rejected_and_listed_with_its_reason(client):
     result = upload(client, ("ures.pdf", b"")).json()["results"][0]
 
     assert result["outcome"] == "rejected"
     assert result["error"]["code"] == "empty_file"
-    assert documents(client)["documents"] == []
+    [entry] = documents(client)["documents"]
+    assert (entry["filename"], entry["status"], entry["error"]["code"]) == ("ures.pdf", "failed", "empty_file")
 
 
 def test_too_large_file_is_rejected(client, app):
@@ -127,7 +130,30 @@ def test_too_large_file_is_rejected(client, app):
 
     assert result["outcome"] == "rejected"
     assert result["error"]["code"] == "file_too_large"
-    assert documents(client)["documents"] == []
+    [entry] = documents(client)["documents"]
+    assert (entry["filename"], entry["error"]["code"]) == ("nagy.pdf", "file_too_large")
+
+
+def test_duplicate_upload_is_listed_with_duplicate_reason(client, app):
+    data = make_pdf(invoice_text("dup-lista-1"))
+    upload(client, ("a.pdf", data))
+    wait_until_processed(client, app)
+
+    upload(client, ("masolat.pdf", data))
+
+    [entry] = documents(client)["documents"]
+    assert (entry["filename"], entry["status"], entry["error"]["code"]) == ("masolat.pdf", "failed", "duplicate_file")
+
+
+def test_rejection_log_is_bounded():
+    tracker = JobTracker()
+
+    for index in range(MAX_REJECTIONS + 5):
+        tracker.record_rejection(f"{index}.pdf", 1, "empty_file")
+
+    listed = tracker.list_all()
+    assert len(listed) == MAX_REJECTIONS
+    assert listed[0].filename == f"{MAX_REJECTIONS + 4}.pdf"
 
 
 def test_upload_without_files_is_a_clear_client_error(client):
