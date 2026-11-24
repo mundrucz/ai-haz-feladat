@@ -5,6 +5,7 @@
   const POLL_MS = 1500;
   const VISIBLE_INVOICE_ROWS = 10;
   const VISIBLE_DOCUMENT_ROWS = 10;
+  const MAX_PROBLEM_ROWS = 500;
   const strings = JSON.parse(document.getElementById("i18n-data").textContent);
   const t = (key, params = {}) =>
     (strings[key] ?? key).replace(/\{(\w+)\}/g, (_, name) => params[name] ?? "");
@@ -12,6 +13,7 @@
   const dropzone = document.getElementById("dropzone");
   const input = document.getElementById("file-input");
   const pickButton = document.getElementById("pick-button");
+  const stopButton = document.getElementById("stop-button");
   const uploadStatus = document.getElementById("upload-status");
   const uploadWarning = document.getElementById("upload-warning");
   const docsSummary = document.getElementById("docs-summary");
@@ -37,6 +39,7 @@
   const ACTIVE = new Set(["pending", "processing"]);
   let pollTimer = null;
   let uploading = false;
+  let stopRequested = false;
 
   // A szerver UTC-ben adja az időt; a felhasználó helyi idejében mutatjuk.
   const formatTime = (iso) =>
@@ -60,18 +63,20 @@
     return data.counts.pending + data.counts.processing > 0;
   }
 
-  // A feldolgozás állapota: a még nem kész és a sikertelen fájlok, valamint a kinyert, de az összesítésből
-  // (részben) kimaradó számlák (pl. nem elérhető MNB-árfolyam) – mindegyik az okával.
+  // A hibás fájlok: a sikertelen feldolgozások, valamint a kinyert, de az összesítésből (részben) kimaradó
+  // számlák (pl. nem elérhető MNB-árfolyam) – mindegyik az okával. A folyamatban lévők nem jelennek meg.
   function renderProblems() {
     const { documents, counts } = lastDocuments;
     const excluded = (lastReport?.invoices ?? []).filter((item) => item.problem);
-    const rows = documents.map((doc) => ({
-      name: doc.filename,
-      status: t(`status.${doc.status}`),
-      statusClass: `status-${doc.status}`,
-      uploaded: formatTime(doc.uploaded_at),
-      reason: errorMessage(doc.error),
-    }));
+    const rows = documents
+      .filter((doc) => doc.status === "failed")
+      .map((doc) => ({
+        name: doc.filename,
+        status: t(`status.${doc.status}`),
+        statusClass: `status-${doc.status}`,
+        uploaded: formatTime(doc.uploaded_at),
+        reason: errorMessage(doc.error),
+      }));
     excluded.forEach((item) =>
       rows.push({
         name: [item.invoice_number, item.partner?.name].filter(Boolean).join(" – ") || t("ui.inv.missing"),
@@ -81,6 +86,8 @@
         reason: strings[`ui.problem.${item.problem}`] ?? item.problem,
       }),
     );
+    const hidden = Math.max(0, rows.length - MAX_PROBLEM_ROWS);
+    rows.length = Math.min(rows.length, MAX_PROBLEM_ROWS);
     docsTable.hidden = rows.length === 0;
     docsBody.replaceChildren(
       ...rows.map((entry) => {
@@ -95,11 +102,15 @@
       }),
     );
     docsSummary.textContent = rows.length
-      ? t("ui.docs.summary", {
-          active: counts.pending + counts.processing,
-          failed: counts.failed,
-          excluded: excluded.length,
-        })
+      ? [
+          t("ui.docs.summary", {
+            failed: counts.failed,
+            excluded: excluded.length,
+          }),
+          hidden ? t("ui.docs.limited", { limit: MAX_PROBLEM_ROWS }) : "",
+        ]
+          .filter(Boolean)
+          .join(" ")
       : t("ui.docs.empty");
     limitHeight(docsWrap, docsBody, VISIBLE_DOCUMENT_ROWS);
   }
@@ -348,30 +359,58 @@
     if (active || uploading) pollTimer = setTimeout(refresh, POLL_MS);
   }
 
-  async function sendBatch(files) {
+  async function sendBatch(files, uploadId) {
     const body = new FormData();
+    body.append("upload_id", uploadId);
     files.forEach((file) => body.append("files", file, file.name));
     const response = await fetch("/api/documents", { method: "POST", body });
     if (!response.ok) throw new Error(String(response.status));
     return (await response.json()).results;
   }
 
+  // A még sorban álló fájlok megszakítása; ha a hívás nem sikerül, azok feldolgozódnak.
+  async function cancelPending(uploadId) {
+    try {
+      const response = await fetch(`/api/documents/uploads/${encodeURIComponent(uploadId)}/cancel`, { method: "POST" });
+      return response.ok ? (await response.json()).cancelled : 0;
+    } catch (error) {
+      return 0;
+    }
+  }
+
+  // Új feltöltésnél a korábbi hibás fájlok listája kiürül; ha a hívás nem sikerül, a lista megmarad.
+  async function clearFailed() {
+    try {
+      await fetch("/api/documents/failed", { method: "DELETE" });
+    } catch (error) {
+      // a feltöltés ettől még indulhat
+    }
+  }
+
+  const newUploadId = () =>
+    crypto.randomUUID ? crypto.randomUUID() : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+
   async function upload(fileList) {
     const files = Array.from(fileList);
     if (!files.length || uploading) return;
     uploading = true;
+    stopRequested = false;
     pickButton.disabled = true;
+    stopButton.disabled = false;
+    stopButton.hidden = false;
     uploadWarning.hidden = false;
+    const uploadId = newUploadId();
     const tally = { accepted: 0, duplicate: 0, rejected: 0 };
     let done = 0;
     let failed = false;
+    await clearFailed();
     refresh();
 
-    for (let start = 0; start < files.length; start += BATCH_SIZE) {
+    for (let start = 0; start < files.length && !stopRequested; start += BATCH_SIZE) {
       const batch = files.slice(start, start + BATCH_SIZE);
       uploadStatus.textContent = t("ui.upload.progress", { done, total: files.length });
       try {
-        for (const result of await sendBatch(batch)) tally[result.outcome] += 1;
+        for (const result of await sendBatch(batch, uploadId)) tally[result.outcome] += 1;
       } catch (error) {
         tally.rejected += batch.length;
         failed = true;
@@ -379,10 +418,23 @@
       done += batch.length;
     }
 
+    // A futó kérés befejezése után kérjük a megszakítást, így nem csúszhat be újabb fájl a sorba.
+    let stopped = 0;
+    if (stopRequested) {
+      const cancelled = await cancelPending(uploadId);
+      tally.accepted = Math.max(0, tally.accepted - cancelled);
+      stopped = files.length - done + cancelled;
+    }
+
     uploading = false;
     pickButton.disabled = false;
+    stopButton.hidden = true;
     uploadWarning.hidden = true;
-    uploadStatus.textContent = [t("ui.upload.summary", tally), failed ? t("ui.upload.failed") : ""]
+    uploadStatus.textContent = [
+      t("ui.upload.summary", tally),
+      stopped ? t("ui.upload.stopped", { stopped }) : "",
+      failed ? t("ui.upload.failed") : "",
+    ]
       .filter(Boolean)
       .join(" ");
     input.value = "";
@@ -397,6 +449,11 @@
   });
 
   pickButton.addEventListener("click", () => input.click());
+  stopButton.addEventListener("click", () => {
+    stopRequested = true;
+    stopButton.disabled = true;
+    uploadStatus.textContent = t("ui.upload.stopping");
+  });
   input.addEventListener("change", () => upload(input.files));
   ["dragenter", "dragover"].forEach((name) =>
     dropzone.addEventListener(name, (event) => {

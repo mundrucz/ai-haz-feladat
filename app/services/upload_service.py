@@ -55,36 +55,42 @@ class UploadService:
         self._processor = processor
         self._max_bytes = max_bytes
 
-    def _reject(self, name: str, size: int, code: str) -> UploadResult:
-        self._jobs.record_rejection(name, size, code)
+    def _reject(
+        self, name: str, size: int, code: str, upload_id: str | None, content_hash: str | None = None
+    ) -> UploadResult:
+        self._jobs.record_rejection(name, size, code, upload_id, content_hash)
         return UploadResult(name, UploadOutcome.REJECTED, error_code=code)
 
-    def _duplicate(self, name: str, size: int, job_id: int | None = None) -> UploadResult:
-        self._jobs.record_rejection(name, size, "duplicate_file")
+    def _duplicate(
+        self, name: str, size: int, upload_id: str | None, content_hash: str, job_id: int | None = None
+    ) -> UploadResult:
+        self._jobs.record_rejection(name, size, "duplicate_file", upload_id, content_hash)
         return UploadResult(name, UploadOutcome.DUPLICATE, job_id)
 
-    async def ingest(self, filename: str, data: bytes) -> UploadResult:
+    async def ingest(self, filename: str, data: bytes, upload_id: str | None = None) -> UploadResult:
         name = _display_name(filename)
         if not data:
-            return self._reject(name, 0, "empty_file")
+            return self._reject(name, 0, "empty_file", upload_id)
         if len(data) > self._max_bytes:
-            return self._reject(name, len(data), "file_too_large")
+            return self._reject(name, len(data), "file_too_large", upload_id)
         content_hash = hash_bytes(data)
         # Előbb a folyamatban lévők közé vesszük fel (szinkron), így a DB-vizsgálat alatt sem csúszhat át duplikátum.
-        job, outcome = self._jobs.add(content_hash, name, len(data))
+        job, outcome = self._jobs.add(content_hash, name, len(data), upload_id)
         if outcome is AddOutcome.DUPLICATE:
-            return self._duplicate(name, len(data), job.id)
+            return self._duplicate(name, len(data), upload_id, content_hash, job.id)
         try:
             stored = await self._invoices.exists(content_hash)
         except Exception:
             logger.exception("upload failed", extra={"upload_name": name})
             self._jobs.finish(job.id)
-            return self._reject(name, len(data), "unexpected_error")
+            return self._reject(name, len(data), "unexpected_error", upload_id, content_hash)
         if stored:
             self._jobs.finish(job.id)
-            return self._duplicate(name, len(data))
+            return self._duplicate(name, len(data), upload_id, content_hash)
         self._processor.enqueue(job.id, data)
         return UploadResult(name, UploadOutcome.ACCEPTED, job.id)
 
-    async def ingest_many(self, files: Iterable[tuple[str, bytes]]) -> list[UploadResult]:
-        return [await self.ingest(name, data) for name, data in files]
+    async def ingest_many(
+        self, files: Iterable[tuple[str, bytes]], upload_id: str | None = None
+    ) -> list[UploadResult]:
+        return [await self.ingest(name, data, upload_id) for name, data in files]

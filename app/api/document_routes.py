@@ -1,6 +1,6 @@
 from collections import Counter
 
-from fastapi import APIRouter, Depends, File, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Path, Query, UploadFile
 
 from app.api.deps import get_jobs, get_settings, get_translator, get_upload_service
 from app.config import Settings
@@ -10,6 +10,8 @@ from app.jobs import Job, JobStatus, JobTracker
 from app.upload import UploadResult, UploadService
 
 router = APIRouter(prefix="/api/documents")
+
+MAX_UPLOAD_ID_LENGTH = 64
 
 
 def _error(translator: Translator, code: str | None, message: str | None = None, fields=()) -> dict | None:
@@ -52,6 +54,7 @@ def _parse_ids(raw: str) -> list[int]:
 @router.post("")
 async def upload_documents(
     files: list[UploadFile] | None = File(default=None),
+    upload_id: str | None = Form(default=None, max_length=MAX_UPLOAD_ID_LENGTH),
     settings: Settings = Depends(get_settings),
     service: UploadService = Depends(get_upload_service),
     translator: Translator = Depends(get_translator),
@@ -59,8 +62,23 @@ async def upload_documents(
     if not files:
         raise InvalidInputError("no files were uploaded", code="no_files")
     items = [(file.filename or "", await file.read(settings.max_upload_bytes + 1)) for file in files]
-    results = await service.ingest_many(items)
+    results = await service.ingest_many(items, upload_id or None)
     return {"results": [_result_view(result, translator) for result in results]}
+
+
+@router.post("/uploads/{upload_id}/cancel")
+async def cancel_upload(
+    upload_id: str = Path(max_length=MAX_UPLOAD_ID_LENGTH),
+    jobs: JobTracker = Depends(get_jobs),
+) -> dict:
+    """Leállítás: a feltöltés még sorban álló fájljai megszakadnak, a már futók befejeződnek."""
+    return {"cancelled": jobs.cancel_pending(upload_id)}
+
+
+@router.delete("/failed")
+async def clear_failed(jobs: JobTracker = Depends(get_jobs)) -> dict:
+    """Új feltöltés előtt kiüríti a hibás fájlok listáját."""
+    return {"cleared": jobs.clear_failed()}
 
 
 @router.get("")

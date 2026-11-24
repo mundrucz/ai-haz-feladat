@@ -61,6 +61,9 @@ h2 { margin: 0 0 0.75rem; font-size: 1.1rem; }
 }
 .button:hover:not(:disabled) { filter: brightness(1.1); }
 .button:disabled { background: #c4cbd3; color: #6b7785; cursor: not-allowed; }
+.button.secondary { background: #fff; color: #b42318; border: 1px solid #b42318; margin-left: 0.5rem; }
+.button.secondary:disabled { background: #f2f4f7; color: #98a2b3; border-color: #d0d5dd; }
+.button[hidden] { display: none; }
 
 
 .warning {

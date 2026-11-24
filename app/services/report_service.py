@@ -8,6 +8,7 @@ from decimal import ROUND_HALF_UP, Decimal
 
 from app.errors import AppError
 from app.extraction.normalize import normalize_key
+from app.failed_files import SOURCE_REPORT, FailedFileLog
 from app.invoices import Direction, InvoiceRecord, InvoiceRepository
 from app.mnb import RateQuote
 from app.rates import RateService, convert
@@ -118,10 +119,18 @@ def _most_common(values) -> str | None:
 
 
 class ReportService:
-    def __init__(self, repository: InvoiceRepository, rates: RateService, report_currency: str) -> None:
+    def __init__(
+        self,
+        repository: InvoiceRepository,
+        rates: RateService,
+        report_currency: str,
+        failure_log: FailedFileLog | None = None,
+    ) -> None:
         self._repository = repository
         self._rates = rates
         self._report_currency = report_currency
+        self._failure_log = failure_log or FailedFileLog()
+        self._logged_problems: dict[int, str] = {}
 
     @property
     def currency(self) -> str:
@@ -130,7 +139,24 @@ class ReportService:
     async def convert_all(self) -> list[ConvertedInvoice]:
         records = await self._repository.list_all()
         failures = await self._rates.prepare(self._needs(records))
-        return [await self._convert(record, failures) for record in records]
+        items = [await self._convert(record, failures) for record in records]
+        self._log_problems(items)
+        return items
+
+    def _log_problems(self, items: list[ConvertedInvoice]) -> None:
+        """Az összesítésből (részben) kimaradó számlákat egyszer naplózza; a megszűnt vagy megváltozott hibát újra."""
+        current = {item.record.id: item.problem for item in items if item.problem}
+        for item in items:
+            if item.problem and self._logged_problems.get(item.record.id) != item.problem:
+                record = item.record
+                self._failure_log.record(
+                    SOURCE_REPORT,
+                    file_name=record.filename,
+                    error_code=item.problem,
+                    content_hash=record.content_hash,
+                    invoice_id=record.id,
+                )
+        self._logged_problems = current
 
     def _needs(self, records: list[InvoiceRecord]) -> dict[str, tuple[date, date]]:
         needs: dict[str, tuple[date, date]] = {}
