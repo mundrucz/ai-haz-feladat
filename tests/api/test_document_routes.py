@@ -1,9 +1,11 @@
 import asyncio
+import json
+import logging
 
 import pytest
 from pdfs import invoice_text, make_blank_pdf, make_encrypted_pdf, make_pdf
 
-from app.jobs import MAX_REJECTIONS, JobTracker
+from app.jobs import MAX_FAILED_FILES, AddOutcome, JobTracker
 
 
 def upload(client, *files):
@@ -145,15 +147,98 @@ def test_duplicate_upload_is_listed_with_duplicate_reason(client, app):
     assert (entry["filename"], entry["status"], entry["error"]["code"]) == ("masolat.pdf", "failed", "duplicate_file")
 
 
-def test_rejection_log_is_bounded():
+def test_failed_files_are_bounded_and_the_oldest_drop_out():
     tracker = JobTracker()
+    processed, _ = tracker.add("h-failed", "feldolgozott.pdf", 1)
+    tracker.claim(processed.id)
+    tracker.mark_failed(processed.id, "no_text", "üres")
 
-    for index in range(MAX_REJECTIONS + 5):
+    for index in range(MAX_FAILED_FILES + 5):
         tracker.record_rejection(f"{index}.pdf", 1, "empty_file")
 
     listed = tracker.list_all()
-    assert len(listed) == MAX_REJECTIONS
-    assert listed[0].filename == f"{MAX_REJECTIONS + 4}.pdf"
+    assert len(listed) == MAX_FAILED_FILES
+    assert listed[0].filename == f"{MAX_FAILED_FILES + 4}.pdf"
+    assert tracker.get(processed.id) is None
+    assert tracker.add("h-failed", "feldolgozott.pdf", 1)[1] is AddOutcome.CREATED
+
+
+def test_active_jobs_do_not_count_towards_the_failed_limit():
+    tracker = JobTracker()
+    active = [tracker.add(f"h{index}", f"{index}.pdf", 1)[0] for index in range(MAX_FAILED_FILES + 5)]
+
+    for index in range(MAX_FAILED_FILES):
+        tracker.record_rejection(f"x{index}.pdf", 1, "empty_file")
+
+    assert len(tracker.list_all()) == 2 * MAX_FAILED_FILES + 5
+    assert all(tracker.get(job.id) is not None for job in active)
+
+
+def test_every_failed_file_is_written_to_the_failed_files_log(client, app, settings):
+    upload(client, ("ures.pdf", b""))
+    upload(client, ("hibas.pdf", make_blank_pdf()))
+    wait_until_processed(client, app)
+    client.delete("/api/documents/failed")
+
+    logging.getLogger("app.failed_files").handlers[0].flush()
+    lines = [json.loads(line) for line in settings.failed_files_log_path.read_text(encoding="utf-8").splitlines()]
+    assert [(line["file_name"], line["error_code"]) for line in lines] == [
+        ("ures.pdf", "empty_file"),
+        ("hibas.pdf", "no_text"),
+    ]
+    assert all(line["uploaded_at"] and "size_bytes" in line for line in lines)
+    assert [(line["source"], line["error_text"]) for line in lines] == [
+        ("intake", "A fájl üres."),
+        ("processing", "A PDF-ben nincs szöveges réteg (üres vagy szkennelt dokumentum)."),
+    ]
+    assert lines[1]["content_hash"]
+
+
+def test_cancel_endpoint_stops_queued_files_of_the_upload(client, app):
+    jobs = app.state.jobs
+    queued, _ = jobs.add("h-queued", "sorban.pdf", 1, upload_id="u-cancel")
+    other, _ = jobs.add("h-other", "masik.pdf", 1, upload_id="u-other")
+
+    response = client.post("/api/documents/uploads/u-cancel/cancel")
+
+    assert response.status_code == 200
+    assert response.json() == {"cancelled": 1}
+    entries = {entry["filename"]: entry for entry in documents(client)["documents"]}
+    assert entries["sorban.pdf"]["status"] == "failed"
+    assert entries["sorban.pdf"]["error"]["code"] == "cancelled"
+    assert "újra feltölthető" in entries["sorban.pdf"]["error"]["message"]
+    assert entries["masik.pdf"]["status"] == "pending"
+    assert jobs.claim(queued.id) is None
+    assert jobs.claim(other.id) is not None
+
+
+def test_clear_failed_endpoint_empties_the_failed_list_only(client, app):
+    upload(client, ("ures.pdf", b""))
+    upload(client, ("hibas.pdf", make_blank_pdf()))
+    wait_until_processed(client, app)
+    waiting, _ = app.state.jobs.add("h-waiting", "var.pdf", 1)
+    assert len(documents(client)["documents"]) == 3
+
+    response = client.delete("/api/documents/failed")
+
+    assert response.json() == {"cleared": 2}
+    assert [entry["filename"] for entry in documents(client)["documents"]] == ["var.pdf"]
+    assert app.state.jobs.get(waiting.id) is not None
+
+
+def test_cancel_endpoint_for_unknown_upload_cancels_nothing(client):
+    assert client.post("/api/documents/uploads/nincs-ilyen/cancel").json() == {"cancelled": 0}
+
+
+def test_upload_accepts_an_upload_id_and_rejects_an_overlong_one(client, app):
+    payload = [("files", ("szamla.pdf", make_pdf(invoice_text("upload-id-1")), "application/pdf"))]
+
+    ok = client.post("/api/documents", files=payload, data={"upload_id": "u-1"})
+    too_long = client.post("/api/documents", files=payload, data={"upload_id": "x" * 65})
+
+    assert ok.status_code == 200
+    assert too_long.status_code == 422
+    wait_until_processed(client, app)
 
 
 def test_upload_without_files_is_a_clear_client_error(client):

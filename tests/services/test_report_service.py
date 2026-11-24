@@ -6,7 +6,10 @@ import pytest
 from app.db import Database
 from app.extraction.company import Company
 from app.extraction.models import InvoiceFields
+from app.failed_files import FailedFileLog
+from app.i18n import Translator
 from app.invoices import InvoiceRepository, classify
+from app.main import BASE_DIR
 from app.mnb import MnbError, RateQuote
 from app.rates import RateRepository, RateService
 from app.report import ReportService, month_range, partner_key
@@ -63,9 +66,9 @@ async def setup(tmp_path):
     return db, InvoiceRepository(db)
 
 
-def make_report(db, invoices, source) -> ReportService:
+def make_report(db, invoices, source, failure_log=None) -> ReportService:
     rates = RateService(RateRepository(db), source, today=lambda: date(2026, 6, 15))
-    return ReportService(invoices, rates, "HUF")
+    return ReportService(invoices, rates, "HUF", failure_log)
 
 
 async def add(invoices, number: str, invoice_fields: InvoiceFields) -> None:
@@ -121,6 +124,22 @@ async def test_each_currency_is_fetched_once_per_report(setup):
     await report_service.build()
 
     assert source.calls == ["EUR"]
+
+
+async def test_invoice_left_out_of_the_report_is_logged_once_with_its_reason(setup, failed_log):
+    db, invoices = setup
+    await add(invoices, "E", fields(invoice_number="E", currency="EUR"))
+    await add(invoices, "H", fields(invoice_number="H", gross_total=Decimal("2000")))
+    translator = Translator(BASE_DIR / "locales", "hu")
+    service = make_report(db, invoices, FixedSource({}, fail={"EUR"}), FailedFileLog(translator))
+
+    await service.build()
+    await service.build()
+
+    [entry] = failed_log
+    assert (entry.source, entry.file_name, entry.error_code) == ("report", "E.pdf", "mnb_unavailable")
+    assert entry.content_hash == "hash-E"
+    assert entry.error_text == "Az MNB árfolyam most nem érhető el."
 
 
 async def test_mnb_failure_marks_only_affected_invoices(setup):
