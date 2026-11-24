@@ -21,6 +21,13 @@ class InvalidInputError(AppError):
     status_code = 400
 
 
+class ConflictError(AppError):
+    """A kérés az erőforrás pillanatnyi állapota miatt nem teljesíthető (pl. folyamatban lévő feldolgozás)."""
+
+    code = "conflict"
+    status_code = 409
+
+
 class ProcessingError(AppError):
     """Egy dokumentum feldolgozása nem sikerült; a hiba a dokumentumnál jelenik meg, a többit nem érinti."""
 

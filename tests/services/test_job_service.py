@@ -119,6 +119,17 @@ def test_clear_failed_forgets_failed_and_rejected_files_but_keeps_active_ones():
     assert jobs.clear_failed() == 0
 
 
+def test_has_active_counts_only_pending_and_processing_jobs():
+    jobs = JobTracker()
+    assert not jobs.has_active()
+    job, _ = jobs.add("h1", "a.pdf", 1)
+    assert jobs.has_active()
+    jobs.claim(job.id)
+    assert jobs.has_active()
+    jobs.mark_failed(job.id, "no_text", "üres")
+    assert not jobs.has_active()
+
+
 def test_cancelled_file_can_be_uploaded_again():
     jobs = JobTracker()
     job, _ = jobs.add("h1", "a.pdf", 1, upload_id="u1")

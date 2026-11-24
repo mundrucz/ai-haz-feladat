@@ -87,6 +87,10 @@ class JobTracker:
         jobs = self._jobs.values() if ids is None else (self._jobs[i] for i in ids if i in self._jobs)
         return sorted(jobs, key=lambda job: job.id, reverse=True)
 
+    def has_active(self) -> bool:
+        """Van-e még sorban álló vagy futó feldolgozás."""
+        return any(job.status in (JobStatus.PENDING, JobStatus.PROCESSING) for job in self._jobs.values())
+
     def claim(self, job_id: int) -> Job | None:
         """`pending` -> `processing`; csak az nyeri meg, aki először kéri, így nincs dupla feldolgozás."""
         job = self._jobs.get(job_id)

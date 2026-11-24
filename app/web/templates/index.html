@@ -40,8 +40,12 @@
 </section>
 
 <section class="card">
-  <h2>{{ t("ui.inv.title") }}</h2>
+  <div class="card-head">
+    <h2>{{ t("ui.inv.title") }}</h2>
+    <button type="button" id="delete-button" class="button danger" disabled>{{ t("ui.inv.delete") }}</button>
+  </div>
   <p id="inv-summary" class="muted" role="status"></p>
+  <p id="inv-notice" class="muted" role="status" hidden></p>
   <div class="table-wrap scroll-wrap" id="inv-wrap">
     <table id="inv-table" class="invoices" hidden>
       <thead>

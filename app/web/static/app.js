@@ -21,6 +21,8 @@
   const docsBody = docsTable.querySelector("tbody");
   const docsWrap = document.getElementById("docs-wrap");
   const invSummary = document.getElementById("inv-summary");
+  const invNotice = document.getElementById("inv-notice");
+  const deleteButton = document.getElementById("delete-button");
   const invTable = document.getElementById("inv-table");
   const invWrap = document.getElementById("inv-wrap");
   const invBody = invTable.querySelector("tbody");
@@ -40,7 +42,19 @@
   let pollTimer = null;
   let uploading = false;
   let stopRequested = false;
+  let deleting = false;
+  let processingActive = false;
+  let invoiceCount = 0;
 
+  // Törölni csak akkor lehet, ha van mit, és nincs folyamatban feltöltés vagy feldolgozás.
+  function updateDeleteButton() {
+    deleteButton.disabled = deleting || uploading || processingActive || invoiceCount === 0;
+  }
+
+  function showNotice(text) {
+    invNotice.textContent = text;
+    invNotice.hidden = !text;
+  }
   // A szerver UTC-ben adja az időt; a felhasználó helyi idejében mutatjuk.
   const formatTime = (iso) =>
     iso ? new Date(iso).toLocaleString(locale, { dateStyle: "short", timeStyle: "medium" }) : "";
@@ -60,7 +74,9 @@
   function renderDocuments(data) {
     lastDocuments = data;
     renderProblems();
-    return data.counts.pending + data.counts.processing > 0;
+    processingActive = data.counts.pending + data.counts.processing > 0;
+    updateDeleteButton();
+    return processingActive;
   }
 
   // A hibás fájlok: a sikertelen feldolgozások, valamint a kinyert, de az összesítésből (részben) kimaradó
@@ -176,6 +192,8 @@
 
   function renderInvoices(data, report) {
     const { invoices, counts } = data;
+    invoiceCount = invoices.length;
+    updateDeleteButton();
     const converted = new Map((report?.invoices ?? []).map((item) => [item.id, item]));
     invTable.hidden = invoices.length === 0;
     invBody.replaceChildren(
@@ -320,7 +338,7 @@
         },
         plugins: {
           legend: { position: "bottom" },
-          tooltip: { callbacks: { label: (item) => `${item.dataset.label}: ${number(item.parsed.y)} ${report.currency}` } },
+          tooltip: { enabled: false },
         },
       },
     });
@@ -390,12 +408,35 @@
   const newUploadId = () =>
     crypto.randomUUID ? crypto.randomUUID() : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 
+  async function deleteInvoices() {
+    if (deleteButton.disabled || !window.confirm(t("ui.inv.delete_confirm", { total: invoiceCount }))) return;
+    deleting = true;
+    updateDeleteButton();
+    showNotice("");
+    try {
+      const response = await fetch("/api/invoices", { method: "DELETE" });
+      if (response.ok) {
+        showNotice(t("ui.inv.deleted", { deleted: (await response.json()).deleted }));
+      } else {
+        const code = (await response.json().catch(() => null))?.error?.code;
+        showNotice(strings[`error.${code}`] ?? t("ui.inv.delete_failed"));
+      }
+    } catch (error) {
+      showNotice(t("ui.inv.delete_failed"));
+    }
+    deleting = false;
+    await refresh();
+    updateDeleteButton();
+  }
+
   async function upload(fileList) {
     const files = Array.from(fileList);
     if (!files.length || uploading) return;
     uploading = true;
     stopRequested = false;
     pickButton.disabled = true;
+    updateDeleteButton();
+    showNotice("");
     stopButton.disabled = false;
     stopButton.hidden = false;
     uploadWarning.hidden = false;
@@ -428,6 +469,7 @@
 
     uploading = false;
     pickButton.disabled = false;
+    updateDeleteButton();
     stopButton.hidden = true;
     uploadWarning.hidden = true;
     uploadStatus.textContent = [
@@ -449,6 +491,7 @@
   });
 
   pickButton.addEventListener("click", () => input.click());
+  deleteButton.addEventListener("click", deleteInvoices);
   stopButton.addEventListener("click", () => {
     stopRequested = true;
     stopButton.disabled = true;

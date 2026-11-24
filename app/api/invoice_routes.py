@@ -2,8 +2,10 @@ from collections import Counter
 
 from fastapi import APIRouter, Depends
 
-from app.api.deps import get_invoice_repository
+from app.api.deps import get_invoice_repository, get_jobs
+from app.errors import ConflictError
 from app.invoices import InvoiceRecord, InvoiceRepository
+from app.jobs import JobTracker
 
 router = APIRouter(prefix="/api/invoices")
 
@@ -32,6 +34,18 @@ def _invoice_view(record: InvoiceRecord) -> dict:
         "issues": list(record.issues),
         "source": record.source,
     }
+
+
+@router.delete("")
+async def delete_invoices(
+    repository: InvoiceRepository = Depends(get_invoice_repository),
+    jobs: JobTracker = Depends(get_jobs),
+) -> dict:
+    """Az összes kinyert számla és a hibás fájlok listájának törlése; feldolgozás közben nem engedett."""
+    if jobs.has_active():
+        raise ConflictError("processing is still in progress", code="processing_active")
+    deleted = await repository.delete_all()
+    return {"deleted": deleted, "cleared_failed": jobs.clear_failed()}
 
 
 @router.get("")
