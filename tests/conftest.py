@@ -4,7 +4,8 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from app.config import Settings
+from app_settings import make_settings
+from app.core.config import Settings
 from app.main import create_app
 
 
@@ -28,8 +29,7 @@ def failed_log():
 
 @pytest.fixture
 def settings(tmp_path: Path) -> Settings:
-    return Settings(
-        _env_file=None,
+    return make_settings(
         database_path=tmp_path / "test.db",
         openrouter_api_key=None,
     )
