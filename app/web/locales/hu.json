@@ -73,6 +73,7 @@
   "ui.problem.missing_due_date": "Fizetési határidő nélkül nem szerepel a diagramon.",
   "ui.problem.mnb_unavailable": "Az MNB árfolyam most nem érhető el.",
   "ui.problem.mnb_no_rate": "Az MNB nem jegyzi ezt a devizát ezen a napon.",
+  "ui.problem.mnb_rate_not_yet": "A teljesítés dátuma túl messze van a jövőben, ezért még nincs hozzá MNB-árfolyam.",
 
   "ui.field.invoice_number": "számlaszám",
   "ui.field.seller_name": "kiállító neve",
@@ -91,6 +92,7 @@
   "ui.issue.currency_not_quoted": "Az MNB nem jegyzi a számla pénznemét, ezért az összege nem váltható át.",
   "ui.issue.same_party": "A kiállító és a vevő azonos.",
   "ui.issue.company_not_found": "A saját cég nem szerepel a számlán.",
+  "ui.issue.no_direction": "A saját cég nem ismerhető fel egyértelműen kiállítóként vagy vevőként, ezért a számlának nincs iránya.",
   "ui.issue.non_positive_total": "A bruttó összeg nem pozitív.",
   "ui.issue.net_exceeds_gross": "A nettó összeg nagyobb a bruttónál.",
   "ui.issue.totals_mismatch": "A nettó és az ÁFA összege nem egyezik a bruttóval.",

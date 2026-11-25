@@ -5,7 +5,7 @@ from decimal import Decimal
 import pytest
 
 from app.db import Database
-from app.mnb import MnbError, MnbNoRateError, MnbRejectedError, RateQuote
+from app.mnb import MnbError, MnbNoRateError, MnbRateNotYetError, MnbRejectedError, RateQuote
 from app.rates import RateRepository, RateService, convert, merge_ranges, missing_ranges
 
 TODAY = date(2026, 6, 15)
@@ -89,6 +89,27 @@ async def test_no_rate_within_lookback_is_reported(repository):
     await rates.prepare({"EUR": (d(10, 3), d(10, 3))})
     with pytest.raises(MnbNoRateError):
         await rates.rate_on("EUR", d(10, 8))
+
+
+async def test_far_future_day_reports_rate_not_yet(repository):
+    source = FakeSource()
+    rates = service(repository, source)
+    far_future = TODAY + timedelta(days=32)
+
+    assert await rates.prepare({"EUR": (far_future, far_future)}) == {}
+    with pytest.raises(MnbRateNotYetError):
+        await rates.rate_on("EUR", far_future)
+    assert source.calls == []
+
+
+async def test_near_future_day_uses_latest_rate(repository):
+    rates = service(repository, FakeSource())
+    near_future = TODAY + timedelta(days=31)
+    await rates.prepare({"EUR": (near_future, near_future)})
+
+    quote = await rates.rate_on("EUR", near_future)
+
+    assert quote.rate_date == d(15, 6)
 
 
 async def test_second_request_for_covered_period_does_not_call_mnb(repository):

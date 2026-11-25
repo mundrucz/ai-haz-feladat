@@ -11,7 +11,7 @@ from typing import Protocol
 
 from app.db import Database
 from app.errors import AppError
-from app.mnb import MnbNoRateError, MnbRejectedError, RateQuote
+from app.mnb import MnbNoRateError, MnbRateNotYetError, MnbRejectedError, RateQuote
 
 logger = logging.getLogger(__name__)
 
@@ -226,7 +226,10 @@ class RateService:
         return failures
 
     async def rate_on(self, currency: str, day: date) -> RateQuote:
-        quote = await self._repository.latest_on_or_before(currency, day, day - self._lookback)
+        earliest = day - self._lookback
+        if earliest > self._today():
+            raise MnbRateNotYetError(f"no MNB rate yet for {currency} on {day.isoformat()}: the date is in the future")
+        quote = await self._repository.latest_on_or_before(currency, day, earliest)
         if quote is None:
             raise MnbNoRateError(f"no MNB rate for {currency} on or before {day.isoformat()}")
         return quote

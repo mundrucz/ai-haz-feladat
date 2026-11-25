@@ -176,6 +176,18 @@ async def test_currency_unknown_to_mnb_is_reported_not_guessed(setup):
     assert report["months"] == []
 
 
+async def test_far_future_performance_date_has_its_own_problem_code(setup):
+    db, invoices = setup
+    await add(invoices, "F", fields(invoice_number="F", currency="EUR", performance_date=date(2026, 8, 1)))
+    source = FixedSource({"EUR": (1, "400")})
+
+    report = await make_report(db, invoices, source).build()
+
+    assert (row(report, "F")["amount"], row(report, "F")["problem"]) == (None, "mnb_rate_not_yet")
+    assert source.calls == []
+    assert report["months"] == []
+
+
 async def test_invoice_without_direction_is_listed_but_not_summed(setup):
     db, invoices = setup
     stranger = fields(invoice_number="S", seller_name="A Kft.", seller_tax_id="1", buyer_name="B Kft.", buyer_tax_id="2")
