@@ -89,14 +89,19 @@ def validate_invoice(
 
 
 def _check_required(fields: InvoiceFields, error) -> None:
-    if not fields.invoice_number:
-        error("missing_field", "invoice_number")
-    if not (fields.seller_name or fields.seller_tax_id):
-        error("missing_field", "seller")
-    if not (fields.buyer_name or fields.buyer_tax_id):
-        error("missing_field", "buyer")
-    for name in ("issue_date", "performance_date", "due_date", "currency", "gross_total"):
-        if getattr(fields, name) is None:
+    for name in (
+        "invoice_number",
+        "seller_name",
+        "seller_tax_id",
+        "buyer_name",
+        "buyer_tax_id",
+        "issue_date",
+        "performance_date",
+        "due_date",
+        "currency",
+        "gross_total",
+    ):
+        if getattr(fields, name) in (None, ""):
             error("missing_field", name)
 
 

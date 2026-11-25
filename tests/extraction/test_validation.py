@@ -39,19 +39,29 @@ def test_complete_invoice_is_ok():
 
 
 def test_each_required_field_is_an_error():
-    for name in ("invoice_number", "issue_date", "performance_date", "due_date", "currency", "gross_total"):
+    required = (
+        "invoice_number",
+        "seller_name",
+        "seller_tax_id",
+        "buyer_name",
+        "buyer_tax_id",
+        "issue_date",
+        "performance_date",
+        "due_date",
+        "currency",
+        "gross_total",
+    )
+    for name in required:
         result = validate(replace(GOOD, **{name: None}))
         assert result.status is InvoiceStatus.INVALID
         assert ("missing_field", name) in codes(result)
 
 
-def test_party_needs_name_or_tax_id():
-    only_tax = replace(GOOD, seller_name=None)
-    assert validate(only_tax).status is InvoiceStatus.OK
-    nothing = replace(GOOD, seller_name=None, seller_tax_id=None)
-    assert ("missing_field", "seller") in codes(validate(nothing))
-    nothing = replace(GOOD, buyer_name=None, buyer_tax_id=None)
-    assert ("missing_field", "buyer") in codes(validate(nothing))
+def test_party_tax_id_is_required_even_when_the_name_is_known():
+    for name in ("seller_tax_id", "buyer_tax_id"):
+        result = validate(replace(GOOD, **{name: ""}))
+        assert result.status is InvoiceStatus.INVALID
+        assert ("missing_field", name) in codes(result)
 
 
 def test_unknown_currency_is_an_error():
