@@ -4,7 +4,7 @@ import sys
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
-from app.failed_files import FAILED_FILES_LOGGER
+FAILED_FILES_LOGGER = "app.failed_files"
 
 _STANDARD_ATTRS = set(logging.makeLogRecord({}).__dict__) | {"message", "asctime"}
 
@@ -23,22 +23,19 @@ class JsonFormatter(logging.Formatter):
         return json.dumps(payload, ensure_ascii=False, default=str)
 
 
-def setup_logging(level: str = "INFO", fmt: str = "text") -> None:
+def setup_logging() -> None:
     handler = logging.StreamHandler(sys.stdout)
-    if fmt == "json":
-        handler.setFormatter(JsonFormatter())
-    else:
-        handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
     root = logging.getLogger()
     root.handlers = [handler]
-    root.setLevel(level.upper())
+    root.setLevel(logging.INFO)
 
 
 FAILED_FILES_LOG_BYTES = 5 * 1024 * 1024
 FAILED_FILES_LOG_BACKUPS = 3
 
 
-def setup_failed_files_log(path: Path | None) -> None:
+def setup_failed_files_log(path: Path) -> None:
     """A hibás fájlok külön, JSON soros naplófájlja (forgatott, így nem nő korlátlanul)."""
     logger = logging.getLogger(FAILED_FILES_LOGGER)
     for existing in list(logger.handlers):
@@ -46,8 +43,6 @@ def setup_failed_files_log(path: Path | None) -> None:
         existing.close()
     logger.propagate = False
     logger.setLevel(logging.INFO)
-    if path is None:
-        return
     path.parent.mkdir(parents=True, exist_ok=True)
     handler = RotatingFileHandler(
         path, maxBytes=FAILED_FILES_LOG_BYTES, backupCount=FAILED_FILES_LOG_BACKUPS, encoding="utf-8"

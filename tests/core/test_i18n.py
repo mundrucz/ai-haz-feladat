@@ -1,6 +1,6 @@
 import json
 
-from app.i18n import Translator
+from app.core.i18n import Translator
 
 
 def _write(path, data):

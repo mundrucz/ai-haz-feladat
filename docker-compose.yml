@@ -2,15 +2,12 @@ services:
   app:
     build: .
     ports:
-      - "8080:8080"
-    env_file:
-      - path: .env
-        required: false
+      - "${APP_PORT:-8080}:8080"
+    env_file: .env
     environment:
       DATABASE_PATH: /app/data/app.db
     volumes:
       - app-data:/app/data
-    restart: unless-stopped
 
 volumes:
   app-data:
