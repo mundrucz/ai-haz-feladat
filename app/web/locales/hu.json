@@ -96,6 +96,7 @@
   "ui.issue.net_exceeds_gross": "A nettó összeg nagyobb a bruttónál.",
   "ui.issue.totals_mismatch": "A nettó és az ÁFA összege nem egyezik a bruttóval.",
   "ui.issue.vat_rate_mismatch": "Az ÁFA összege nem egyezik a számlán szereplő ÁFA-kulccsal.",
+  "ui.issue.line_items_mismatch": "A tételsorok összege nem egyezik a végösszeggel.",
   "ui.issue.date_out_of_range": "Valószínűtlen dátum: {field}.",
   "ui.issue.due_before_issue": "A fizetési határidő a kiállítás előtt van.",
   "ui.issue.performance_after_due": "A teljesítés a fizetési határidő után van.",

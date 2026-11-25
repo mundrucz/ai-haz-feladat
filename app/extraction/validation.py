@@ -9,6 +9,7 @@ from enum import StrEnum
 
 from app.extraction.company import Company
 from app.extraction.labels import Labels, make_lines
+from app.extraction.line_items import check_line_items
 from app.extraction.models import InvoiceFields
 from app.extraction.normalize import is_known_currency, normalize_key
 
@@ -70,6 +71,7 @@ def validate_invoice(
     _check_totals(fields, warning)
     if source_text is not None:
         _check_vat_rate(fields, source_text, warning)
+        _check_line_items(fields, source_text, warning)
     _check_dates(fields, warning, today or date.today())
 
     if _same_party(fields):
@@ -126,6 +128,14 @@ def _check_vat_rate(fields: InvoiceFields, text: str, warning) -> None:
     lowest = net * rates[0] / 100 if len(rates) == 1 else Decimal(0)
     if not lowest - tolerance <= vat <= highest + tolerance:
         warning("vat_rate_mismatch", "vat_total")
+
+
+def _check_line_items(fields: InvoiceFields, text: str, warning) -> None:
+    """A tételsorok összege egyezzen a nettó vagy a bruttó végösszeggel; tételsor nélkül nincs ellenőrzés."""
+    targets = [value for value in (fields.net_total, fields.gross_total) if value is not None]
+    totals = [value for value in (fields.net_total, fields.vat_total, fields.gross_total) if value is not None]
+    if check_line_items(text, targets, totals).consistent is False:
+        warning("line_items_mismatch", "gross_total")
 
 
 def _stated_vat_rates(text: str) -> list[Decimal]:
