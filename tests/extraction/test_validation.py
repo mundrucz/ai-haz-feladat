@@ -39,7 +39,7 @@ def test_complete_invoice_is_ok():
 
 
 def test_each_required_field_is_an_error():
-    for name in ("invoice_number", "issue_date", "due_date", "currency", "gross_total"):
+    for name in ("invoice_number", "issue_date", "performance_date", "due_date", "currency", "gross_total"):
         result = validate(replace(GOOD, **{name: None}))
         assert result.status is InvoiceStatus.INVALID
         assert ("missing_field", name) in codes(result)
@@ -60,10 +60,10 @@ def test_unknown_currency_is_an_error():
     assert ("unknown_currency", "currency") in codes(result)
 
 
-def test_missing_performance_date_needs_review():
+def test_missing_performance_date_is_an_error():
     result = validate(replace(GOOD, performance_date=None))
-    assert result.status is InvoiceStatus.NEEDS_REVIEW
-    assert codes(result) == {("performance_date_missing", "performance_date")}
+    assert result.status is InvoiceStatus.INVALID
+    assert codes(result) == {("missing_field", "performance_date")}
 
 
 def test_totals_mismatch():
@@ -180,7 +180,7 @@ def test_company_must_appear_in_source_text():
 
 
 def test_errors_take_precedence_over_warnings():
-    result = validate(replace(GOOD, invoice_number=None, performance_date=None))
+    result = validate(replace(GOOD, invoice_number=None, vat_total=Decimal("100.00")))
     assert result.status is InvoiceStatus.INVALID
     assert {issue.severity for issue in result.issues} == {Severity.ERROR, Severity.WARNING}
 

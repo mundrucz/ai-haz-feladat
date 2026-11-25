@@ -52,8 +52,8 @@ def partner_key(tax_id: str | None, name: str | None) -> str | None:
 
 
 def rate_date(record: InvoiceRecord) -> date | None:
-    """Az árfolyam napja: a teljesítés dátuma, ennek hiányában a kiállítás dátuma."""
-    return record.fields.performance_date or record.fields.issue_date
+    """Az árfolyam napja: a teljesítés dátuma (nincs tartalék)."""
+    return record.fields.performance_date
 
 
 def month_range(first: str, last: str) -> list[str]:
