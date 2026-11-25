@@ -49,14 +49,16 @@ class FixedSource:
     def __init__(self, rates: dict[str, tuple[int, str]], fail: set[str] = frozenset()) -> None:
         self.rates, self.fail, self.calls = rates, fail, []
 
-    async def fetch_rates(self, currency, start, end):
-        self.calls.append(currency)
-        if currency in self.fail:
+    async def fetch_rates(self, currencies, start, end):
+        self.calls.append(tuple(currencies))
+        if self.fail & set(currencies):
             raise MnbError("down")
-        if currency not in self.rates:
-            return []
-        unit, value = self.rates[currency]
-        return [RateQuote(currency, start, unit, Decimal(value))]
+        quotes = []
+        for currency in currencies:
+            if currency in self.rates:
+                unit, value = self.rates[currency]
+                quotes.append(RateQuote(currency, start, unit, Decimal(value)))
+        return quotes
 
 
 @pytest.fixture
@@ -123,7 +125,19 @@ async def test_each_currency_is_fetched_once_per_report(setup):
     await report_service.build()
     await report_service.build()
 
-    assert source.calls == ["EUR"]
+    assert source.calls == [("EUR",)]
+
+
+async def test_every_foreign_currency_of_a_report_is_fetched_with_one_request(setup):
+    db, invoices = setup
+    await add(invoices, "A", fields(invoice_number="A", currency="EUR"))
+    await add(invoices, "B", fields(invoice_number="B", currency="USD"))
+    await add(invoices, "C", fields(invoice_number="C", currency="JPY"))
+    source = FixedSource({"EUR": (1, "400"), "USD": (1, "350"), "JPY": (100, "2.5")})
+
+    await make_report(db, invoices, source).build()
+
+    assert source.calls == [("EUR", "JPY", "USD")]
 
 
 async def test_invoice_left_out_of_the_report_is_logged_once_with_its_reason(setup, failed_log):

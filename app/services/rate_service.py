@@ -2,14 +2,16 @@
 
 import asyncio
 import logging
-from collections.abc import Callable, Iterable, Mapping
+import time
+from collections.abc import Callable, Iterable, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import date, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Protocol
 
 from app.db import Database
 from app.errors import AppError
-from app.mnb import MnbNoRateError, RateQuote
+from app.mnb import MnbNoRateError, MnbRejectedError, RateQuote
 
 logger = logging.getLogger(__name__)
 
@@ -17,7 +19,15 @@ _DAY = timedelta(days=1)
 
 
 class RateSource(Protocol):
-    async def fetch_rates(self, currency: str, start: date, end: date) -> list[RateQuote]: ...
+    async def fetch_rates(self, currencies: Sequence[str], start: date, end: date) -> list[RateQuote]: ...
+
+    async def fetch_currencies(self) -> frozenset[str]: ...
+
+
+@dataclass(frozen=True, slots=True)
+class SupportedCurrencies:
+    codes: frozenset[str]
+    fetched_on: date
 
 
 def convert(amount: Decimal, quote: RateQuote) -> Decimal:
@@ -58,6 +68,24 @@ class RateRepository:
                     "INSERT INTO rate_coverage (currency, start_date, end_date) VALUES (?, ?, ?)",
                     [(currency, s.isoformat(), e.isoformat()) for s, e in merged],
                 )
+            await conn.commit()
+
+    async def supported_currencies(self) -> SupportedCurrencies | None:
+        async with self._db.connect() as conn:
+            async with conn.execute("SELECT code, fetched_on FROM mnb_currencies") as cursor:
+                rows = await cursor.fetchall()
+        if not rows:
+            return None
+        return SupportedCurrencies(frozenset(r["code"] for r in rows), date.fromisoformat(rows[0]["fetched_on"]))
+
+    async def store_supported_currencies(self, codes: Iterable[str], fetched_on: date) -> None:
+        async with self._db.connect() as conn:
+            await conn.execute("BEGIN IMMEDIATE")
+            await conn.execute("DELETE FROM mnb_currencies")
+            await conn.executemany(
+                "INSERT INTO mnb_currencies (code, fetched_on) VALUES (?, ?)",
+                [(code, fetched_on.isoformat()) for code in codes],
+            )
             await conn.commit()
 
     async def latest_on_or_before(self, currency: str, day: date, earliest: date) -> RateQuote | None:
@@ -111,25 +139,90 @@ class RateService:
         *,
         today: Callable[[], date] = date.today,
         lookback_days: int = 31,
+        max_request_days: int = 366,
+        currencies_ttl_days: int = 7,
+        currencies_retry_seconds: float = 60.0,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._repository = repository
         self._source = source
         self._today = today
         self._lookback = timedelta(days=lookback_days)
-        self._locks: dict[str, asyncio.Lock] = {}
+        self._max_request = timedelta(days=max(1, max_request_days))
+        self._currencies_ttl = timedelta(days=currencies_ttl_days)
+        self._currencies_retry = currencies_retry_seconds
+        self._clock = clock
+        self._currencies_failed_at: float | None = None
+        self._currencies_lock = asyncio.Lock()
+        self._fetch_lock = asyncio.Lock()
+
+    async def is_quoted(self, currency: str) -> bool | None:
+        """Jegyzi-e az MNB a devizát (GetCurrencies); None, ha a lista nem érhető el (nem tudjuk)."""
+        supported = await self._supported_currencies()
+        return None if supported is None else currency in supported
+
+    async def _supported_currencies(self) -> frozenset[str] | None:
+        stored = await self._repository.supported_currencies()
+        if self._fresh(stored):
+            return stored.codes
+        # Egyszerre egy lekérés fut; a közelmúltban sikertelen lekérést nem ismételjük minden számlánál.
+        async with self._currencies_lock:
+            stored = await self._repository.supported_currencies()
+            if self._fresh(stored):
+                return stored.codes
+            fallback = stored.codes if stored else None
+            if self._currencies_failed_at is not None and self._clock() - self._currencies_failed_at < self._currencies_retry:
+                return fallback
+            try:
+                codes = await self._source.fetch_currencies()
+            except AppError as exc:
+                age = (self._today() - stored.fetched_on).days if stored else None
+                logger.warning(
+                    "mnb currency list unavailable",
+                    extra={"code": exc.code, "stored_list_age_days": age},
+                )
+                self._currencies_failed_at = self._clock()
+                return fallback
+            self._currencies_failed_at = None
+            await self._repository.store_supported_currencies(codes, self._today())
+            logger.info("mnb currency list refreshed", extra={"currencies": len(codes)})
+            return codes
+
+    def _fresh(self, stored: SupportedCurrencies | None) -> bool:
+        return stored is not None and self._today() - stored.fetched_on < self._currencies_ttl
 
     async def prepare(self, needs: Mapping[str, tuple[date, date]]) -> dict[str, AppError]:
-        """Devizánként egyszer lekéri a hiányzó időszakot; a sikertelen devizák hibáit adja vissza."""
+        """Egyetlen kéréssel lekéri a hiányzó devizák hiányzó időszakát; a sikertelen devizák hibáit adja vissza."""
         failures: dict[str, AppError] = {}
-
-        async def one(currency: str, first: date, last: date) -> None:
-            try:
-                await self._ensure(currency, first, last)
-            except AppError as exc:
-                logger.warning("rate fetch failed", extra={"currency": currency, "code": exc.code})
-                failures[currency] = exc
-
-        await asyncio.gather(*(one(currency, *span) for currency, span in needs.items()))
+        today = self._today()
+        wanted = {
+            currency: (first - self._lookback, min(last, today))
+            for currency, (first, last) in needs.items()
+            if first - self._lookback <= min(last, today)
+        }
+        if not wanted:
+            return failures
+        # Egyszerre egy lekérés fut; a várakozó hívás a zár után újra megnézi, mi hiányzik, így nem duplikál.
+        async with self._fetch_lock:
+            gaps: dict[str, list[tuple[date, date]]] = {}
+            for currency, (start, end) in wanted.items():
+                if missing := missing_ranges(start, end, await self._repository.coverage(currency)):
+                    gaps[currency] = missing
+            if gaps:
+                start = min(found[0][0] for found in gaps.values())
+                end = max(found[-1][1] for found in gaps.values())
+                # A tartományt legfeljebb `max_request_days` hosszú darabokra bontjuk; a hiány nélküli darabot kihagyjuk.
+                chunk_start = start
+                while chunk_start <= end:
+                    chunk_end = min(end, chunk_start + self._max_request - _DAY)
+                    needed = sorted(
+                        currency
+                        for currency, found in gaps.items()
+                        if currency not in failures and any(s <= chunk_end and e >= chunk_start for s, e in found)
+                    )
+                    if needed:
+                        await self._fetch(needed, chunk_start, chunk_end, failures)
+                    chunk_start = chunk_end + _DAY
         return failures
 
     async def rate_on(self, currency: str, day: date) -> RateQuote:
@@ -138,15 +231,31 @@ class RateService:
             raise MnbNoRateError(f"no MNB rate for {currency} on or before {day.isoformat()}")
         return quote
 
-    async def _ensure(self, currency: str, first: date, last: date) -> None:
-        today = self._today()
-        start, end = first - self._lookback, min(last, today)
-        if end < start:
+    async def _fetch(self, currencies: list[str], start: date, end: date, failures: dict[str, AppError]) -> None:
+        try:
+            quotes = await self._source.fetch_rates(currencies, start, end)
+        except MnbRejectedError as exc:
+            if len(currencies) == 1:
+                self._record_failure(currencies, exc, failures)
+                return
+            # Egy elutasított deviza ne vigye magával a többit: külön kérésekkel kiderül, melyik a hibás.
+            for currency in currencies:
+                await self._fetch([currency], start, end, failures)
             return
-        # Devizánként egyszerre egy lekérés fut, így az azonos időszakot kérő párhuzamos hívások nem duplikálnak.
-        async with self._locks.setdefault(currency, asyncio.Lock()):
-            for gap_start, gap_end in missing_ranges(start, end, await self._repository.coverage(currency)):
-                quotes = await self._source.fetch_rates(currency, gap_start, gap_end)
-                # A mai nap árfolyama napközben még hiányozhat, ezért legfeljebb tegnapig jegyezzük lekértnek.
-                covered_end = min(gap_end, today - _DAY)
-                await self._repository.store(currency, gap_start, covered_end, quotes)
+        except AppError as exc:
+            self._record_failure(currencies, exc, failures)
+            return
+        by_currency: dict[str, list[RateQuote]] = {currency: [] for currency in currencies}
+        for quote in quotes:
+            if quote.currency in by_currency:
+                by_currency[quote.currency].append(quote)
+        # A mai nap árfolyama napközben még hiányozhat, ezért legfeljebb tegnapig jegyezzük lekértnek.
+        covered_end = min(end, self._today() - _DAY)
+        for currency, found in by_currency.items():
+            await self._repository.store(currency, start, covered_end, found)
+
+    @staticmethod
+    def _record_failure(currencies: list[str], exc: AppError, failures: dict[str, AppError]) -> None:
+        logger.warning("rate fetch failed", extra={"currencies": ",".join(currencies), "code": exc.code})
+        for currency in currencies:
+            failures[currency] = exc

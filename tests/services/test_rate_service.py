@@ -1,11 +1,11 @@
 import asyncio
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 
 import pytest
 
 from app.db import Database
-from app.mnb import MnbError, MnbNoRateError, RateQuote
+from app.mnb import MnbError, MnbNoRateError, MnbRejectedError, RateQuote
 from app.rates import RateRepository, RateService, convert, merge_ranges, missing_ranges
 
 TODAY = date(2026, 6, 15)
@@ -20,17 +20,26 @@ class FakeSource:
 
     def __init__(self, unit: int = 1, rate: str = "400", delay: float = 0, fail: Exception | None = None) -> None:
         self.calls: list[tuple[str, date, date]] = []
+        self.currency_calls = 0
+        self.currencies: frozenset[str] = frozenset({"HUF", "EUR", "USD"})
+        self.currencies_fail: Exception | None = None
         self.unit, self.rate, self.delay, self.fail = unit, Decimal(rate), delay, fail
 
-    async def fetch_rates(self, currency: str, start: date, end: date) -> list[RateQuote]:
-        self.calls.append((currency, start, end))
+    async def fetch_currencies(self) -> frozenset[str]:
+        self.currency_calls += 1
+        if self.currencies_fail:
+            raise self.currencies_fail
+        return self.currencies
+
+    async def fetch_rates(self, currencies, start: date, end: date) -> list[RateQuote]:
+        self.calls.append((tuple(currencies), start, end))
         await asyncio.sleep(self.delay)
         if self.fail:
             raise self.fail
         quotes, day = [], start
         while day <= end:
             if day.weekday() < 5:
-                quotes.append(RateQuote(currency, day, self.unit, self.rate + day.day))
+                quotes.extend(RateQuote(c, day, self.unit, self.rate + day.day) for c in currencies)
             day = date.fromordinal(day.toordinal() + 1)
         return quotes
 
@@ -100,7 +109,7 @@ async def test_only_the_missing_period_is_fetched(repository):
 
     await rates.prepare({"EUR": (d(10, 3), d(30, 3))})
 
-    assert source.calls == [("EUR", d(21, 3), d(30, 3))]
+    assert source.calls == [(("EUR",), d(21, 3), d(30, 3))]
 
 
 async def test_parallel_requests_for_one_currency_fetch_once(repository):
@@ -110,20 +119,144 @@ async def test_parallel_requests_for_one_currency_fetch_once(repository):
     assert len(source.calls) == 1
 
 
-async def test_currencies_are_fetched_separately_and_failures_are_isolated(repository):
-    class Mixed(FakeSource):
-        async def fetch_rates(self, currency, start, end):
-            if currency == "CZK":
-                raise MnbError("down")
-            return await super().fetch_rates(currency, start, end)
+async def test_long_period_is_split_into_requests_of_limited_length(repository):
+    source = FakeSource()
+    rates = service(repository, source, lookback_days=0, max_request_days=10)
 
-    rates = service(repository, Mixed())
+    assert await rates.prepare({"EUR": (d(1, 3), d(25, 3))}) == {}
+
+    assert source.calls == [
+        (("EUR",), d(1, 3), d(10, 3)),
+        (("EUR",), d(11, 3), d(20, 3)),
+        (("EUR",), d(21, 3), d(25, 3)),
+    ]
+    assert (await rates.rate_on("EUR", d(25, 3))).rate_date == d(25, 3)
+
+
+async def test_chunks_without_any_missing_day_are_skipped(repository):
+    source = FakeSource()
+    rates = service(repository, source, lookback_days=0, max_request_days=10)
+
+    await rates.prepare({"EUR": (d(1, 3), d(3, 3)), "USD": (d(1, 5), d(3, 5))})
+
+    assert source.calls == [(("EUR",), d(1, 3), d(10, 3)), (("USD",), d(30, 4), d(3, 5))]
+
+
+async def test_failed_currency_is_not_requested_again_in_later_chunks(repository):
+    source = FakeSource(fail=MnbError("down"))
+    rates = service(repository, source, lookback_days=0, max_request_days=10)
+
+    failures = await rates.prepare({"EUR": (d(1, 3), d(25, 3))})
+
+    assert set(failures) == {"EUR"}
+    assert len(source.calls) == 1
+
+
+async def test_all_missing_currencies_are_fetched_with_one_request(repository):
+    source = FakeSource()
+    rates = service(repository, source, lookback_days=0)
+
+    failures = await rates.prepare({"EUR": (d(10, 3), d(12, 3)), "USD": (d(11, 3), d(20, 3)), "JPY": (d(5, 3), d(6, 3))})
+
+    assert failures == {}
+    assert source.calls == [(("EUR", "JPY", "USD"), d(5, 3), d(20, 3))]
+    assert (await rates.rate_on("JPY", d(5, 3))).rate == Decimal("405")
+    assert (await rates.rate_on("USD", d(20, 3))).rate == Decimal("420")
+
+
+async def test_already_stored_currencies_are_left_out_of_the_request(repository):
+    source = FakeSource()
+    rates = service(repository, source, lookback_days=0)
+    await rates.prepare({"EUR": (d(10, 3), d(12, 3))})
+    source.calls.clear()
+
+    await rates.prepare({"EUR": (d(10, 3), d(12, 3)), "USD": (d(10, 3), d(12, 3))})
+
+    assert source.calls == [(("USD",), d(10, 3), d(12, 3))]
+
+
+async def test_parallel_requests_for_different_currencies_do_not_repeat_fetches(repository):
+    source = FakeSource(delay=0.05)
+    rates = service(repository, source)
+    await asyncio.gather(
+        rates.prepare({"EUR": (d(10, 3), d(20, 3)), "USD": (d(10, 3), d(20, 3))}),
+        rates.prepare({"EUR": (d(10, 3), d(20, 3)), "USD": (d(10, 3), d(20, 3))}),
+        rates.prepare({"USD": (d(12, 3), d(18, 3))}),
+    )
+    assert len(source.calls) == 1
+
+
+async def test_rejected_currency_does_not_take_the_others_down(repository):
+    class Picky(FakeSource):
+        async def fetch_rates(self, currencies, start, end):
+            if "CZK" in currencies:
+                raise MnbRejectedError("unknown currency")
+            return await super().fetch_rates(currencies, start, end)
+
+    source = Picky()
+    rates = service(repository, source)
     failures = await rates.prepare({"EUR": (d(10, 3), d(10, 3)), "CZK": (d(10, 3), d(10, 3))})
 
     assert set(failures) == {"CZK"}
     assert (await rates.rate_on("EUR", d(10, 3))).rate == Decimal("410")
     with pytest.raises(MnbNoRateError):
         await rates.rate_on("CZK", d(10, 3))
+
+
+async def test_mnb_outage_is_one_request_and_fails_every_currency(repository):
+    source = FakeSource(fail=MnbError("down"))
+    rates = service(repository, source)
+
+    failures = await rates.prepare({"EUR": (d(10, 3), d(10, 3)), "USD": (d(10, 3), d(10, 3))})
+
+    assert set(failures) == {"EUR", "USD"}
+    assert len(source.calls) == 1
+
+
+async def test_quoted_currencies_come_from_the_mnb_list_and_are_cached(repository):
+    source = FakeSource()
+    rates = service(repository, source)
+
+    assert await rates.is_quoted("EUR") is True
+    assert await rates.is_quoted("XTS") is False
+    assert await asyncio.gather(*(rates.is_quoted("USD") for _ in range(5))) == [True] * 5
+
+    assert source.currency_calls == 1
+
+
+async def test_currency_list_is_refreshed_after_it_expires(repository):
+    source = FakeSource()
+    await service(repository, source).is_quoted("EUR")
+    source.currencies = frozenset({"HUF", "CZK"})
+    later = RateService(repository, source, today=lambda: TODAY + timedelta(days=7))
+
+    assert await later.is_quoted("CZK") is True
+    assert await later.is_quoted("EUR") is False
+    assert source.currency_calls == 2
+
+
+async def test_stale_currency_list_is_used_when_mnb_is_down(repository):
+    source = FakeSource()
+    await service(repository, source).is_quoted("EUR")
+    source.currencies_fail = MnbError("down")
+    later = RateService(repository, source, today=lambda: TODAY + timedelta(days=30))
+
+    assert await later.is_quoted("EUR") is True
+
+
+async def test_unknown_support_when_mnb_is_down_and_nothing_is_stored(repository):
+    source = FakeSource()
+    source.currencies_fail = MnbError("down")
+    now = [0.0]
+    rates = service(repository, source, currencies_retry_seconds=60, clock=lambda: now[0])
+
+    assert await rates.is_quoted("EUR") is None
+    assert await rates.is_quoted("EUR") is None
+    assert source.currency_calls == 1  # a sikertelen lekérést nem ismételjük azonnal
+
+    now[0] = 61
+    source.currencies_fail = None
+    assert await rates.is_quoted("EUR") is True
 
 
 async def test_failed_fetch_is_not_remembered_as_covered(repository):
