@@ -1,15 +1,14 @@
 """A hibás fájlok külön naplója: minden hibáról egy bejegyzés kerül az `app.failed_files` loggerbe.
 
 A napló a memóriabeli lista korlátján (és az új feltöltéskor történő ürítésen) túl is megőrzi a hibákat.
-A fájl beállítása a `logging_setup.setup_failed_files_log`-ban van.
+A fájl beállítása a `core.logging_config.setup_failed_files_log`-ban van.
 """
 
 import logging
 from collections.abc import Sequence
 
-from app.i18n import Translator
-
-FAILED_FILES_LOGGER = "app.failed_files"
+from app.core.i18n import Translator
+from app.core.logging_config import FAILED_FILES_LOGGER
 
 SOURCE_INTAKE = "intake"
 SOURCE_PROCESSING = "processing"

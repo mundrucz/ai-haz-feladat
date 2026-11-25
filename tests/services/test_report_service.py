@@ -3,16 +3,18 @@ from decimal import Decimal
 
 import pytest
 
-from app.db import Database
+from app.clients.mnb_client import MnbError, RateQuote
+from app.core.i18n import Translator
+from app.db.database import Database
 from app.extraction.company import Company
 from app.extraction.models import InvoiceFields
-from app.failed_files import FailedFileLog
-from app.i18n import Translator
-from app.invoices import InvoiceRepository, classify
-from app.main import BASE_DIR
-from app.mnb import MnbError, RateQuote
-from app.rates import RateRepository, RateService
-from app.report import ReportService, month_range, partner_key
+from app.main import WEB_DIR
+from app.repositories.invoice_repository import InvoiceRepository
+from app.repositories.rate_repository import RateRepository
+from app.services.failed_file_service import FailedFileLog
+from app.services.invoice_service import classify
+from app.services.rate_service import RateService
+from app.services.report_service import ReportService, month_range, partner_key
 
 COMPANY = Company("Nordwind Solutions Kft.", "26481937-2-43", "HU26481937")
 
@@ -144,7 +146,7 @@ async def test_invoice_left_out_of_the_report_is_logged_once_with_its_reason(set
     db, invoices = setup
     await add(invoices, "E", fields(invoice_number="E", currency="EUR"))
     await add(invoices, "H", fields(invoice_number="H", gross_total=Decimal("2000")))
-    translator = Translator(BASE_DIR / "locales", "hu")
+    translator = Translator(WEB_DIR / "locales", "hu")
     service = make_report(db, invoices, FixedSource({}, fail={"EUR"}), FailedFileLog(translator))
 
     await service.build()

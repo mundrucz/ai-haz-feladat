@@ -2,9 +2,9 @@ import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 
-from app.errors import AppError
-from app.jobs import JobTracker
-from app.pdf import PdfText
+from app.core.errors import AppError
+from app.services.job_service import JobTracker
+from app.services.pdf_service import PdfText
 
 logger = logging.getLogger(__name__)
 

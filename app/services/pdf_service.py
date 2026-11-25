@@ -3,7 +3,7 @@ from dataclasses import dataclass
 
 import pymupdf
 
-from app.errors import ProcessingError
+from app.core.errors import ProcessingError
 
 PAGE_SEPARATOR = "\f"
 _HEADER_SCAN_BYTES = 1024

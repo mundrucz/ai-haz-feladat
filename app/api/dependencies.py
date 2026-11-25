@@ -1,13 +1,13 @@
 from fastapi import Request
 from fastapi.templating import Jinja2Templates
 
-from app.config import Settings
-from app.db import Database
-from app.i18n import Translator
-from app.invoices import InvoiceRepository
-from app.jobs import JobTracker
-from app.report import ReportService
-from app.upload import UploadService
+from app.core.config import Settings
+from app.core.i18n import Translator
+from app.db.database import Database
+from app.repositories.invoice_repository import InvoiceRepository
+from app.services.job_service import JobTracker
+from app.services.report_service import ReportService
+from app.services.upload_service import UploadService
 
 
 def get_settings(request: Request) -> Settings:

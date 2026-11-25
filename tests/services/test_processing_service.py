@@ -2,10 +2,10 @@ import asyncio
 
 from pdfs import make_pdf
 
-from app.errors import ProcessingError
-from app.jobs import JobStatus, JobTracker
-from app.pdf import PdfText
-from app.processing import DocumentProcessor
+from app.core.errors import ProcessingError
+from app.services.job_service import JobStatus, JobTracker
+from app.services.pdf_service import PdfText
+from app.services.processing_service import DocumentProcessor
 
 
 def add_job(jobs: JobTracker, name: str):

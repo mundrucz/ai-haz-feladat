@@ -1,4 +1,4 @@
-from app.db import Database
+from app.db.database import Database
 
 
 async def test_init_creates_database_and_is_idempotent(tmp_path):

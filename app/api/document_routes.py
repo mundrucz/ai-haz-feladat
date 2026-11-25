@@ -2,12 +2,12 @@ from collections import Counter
 
 from fastapi import APIRouter, Depends, File, Form, Path, Query, UploadFile
 
-from app.api.deps import get_jobs, get_settings, get_translator, get_upload_service
-from app.config import Settings
-from app.errors import InvalidInputError
-from app.i18n import Translator
-from app.jobs import Job, JobStatus, JobTracker
-from app.upload import UploadResult, UploadService
+from app.api.dependencies import get_jobs, get_settings, get_translator, get_upload_service
+from app.core.config import Settings
+from app.core.errors import InvalidInputError
+from app.core.i18n import Translator
+from app.services.job_service import Job, JobStatus, JobTracker
+from app.services.upload_service import UploadResult, UploadService
 
 router = APIRouter(prefix="/api/documents")
 

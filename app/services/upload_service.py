@@ -5,9 +5,9 @@ from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import PurePath
 
-from app.invoices import InvoiceRepository
-from app.jobs import AddOutcome, JobTracker
-from app.processing import DocumentProcessor
+from app.repositories.invoice_repository import InvoiceRepository
+from app.services.job_service import AddOutcome, JobTracker
+from app.services.processing_service import DocumentProcessor
 
 logger = logging.getLogger(__name__)
 

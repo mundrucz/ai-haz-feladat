@@ -8,7 +8,7 @@ from typing import Protocol
 
 import httpx
 
-from app.errors import AppError
+from app.core.errors import AppError
 
 logger = logging.getLogger(__name__)
 

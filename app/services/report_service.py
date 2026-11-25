@@ -6,12 +6,12 @@ from dataclasses import dataclass
 from datetime import date
 from decimal import ROUND_HALF_UP, Decimal
 
-from app.errors import AppError
+from app.clients.mnb_client import RateQuote
+from app.core.errors import AppError
 from app.extraction.normalize import normalize_key
-from app.failed_files import SOURCE_REPORT, FailedFileLog
-from app.invoices import Direction, InvoiceRecord, InvoiceRepository
-from app.mnb import RateQuote
-from app.rates import RateService, convert
+from app.repositories.invoice_repository import Direction, InvoiceRecord, InvoiceRepository
+from app.services.failed_file_service import SOURCE_REPORT, FailedFileLog
+from app.services.rate_service import RateService, convert
 
 logger = logging.getLogger(__name__)
 
