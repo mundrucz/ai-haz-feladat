@@ -132,6 +132,25 @@ def test_vat_rate_check_skipped_without_a_stated_rate_or_text():
     assert validate(fields).status is InvoiceStatus.OK
 
 
+LINE_ITEMS = "Munka 2 db 400,00 800,00\nAnyag 4 db 50,00 200,00\nNettó összesen 1 000,00 EUR\nÁFA összesen (27%) 270,00 EUR"
+
+
+def test_matching_line_items_are_ok():
+    assert validate(GOOD, source_text=LINE_ITEMS).status is InvoiceStatus.OK
+
+
+def test_line_items_not_matching_the_total_need_review():
+    fields = replace(GOOD, net_total=Decimal("1200.00"), vat_total=Decimal("324.00"), gross_total=Decimal("1524.00"))
+    result = validate(fields, source_text=LINE_ITEMS)
+    assert result.status is InvoiceStatus.NEEDS_REVIEW
+    assert ("line_items_mismatch", "gross_total") in codes(result)
+
+
+def test_line_items_check_is_skipped_without_line_items_or_text():
+    assert validate(GOOD, source_text="Nettó összesen 1 000,00 EUR").status is InvoiceStatus.OK
+    assert validate(GOOD).status is InvoiceStatus.OK
+
+
 def test_totals_check_skipped_when_a_part_is_missing():
     assert validate(replace(GOOD, vat_total=None)).status is InvoiceStatus.OK
     assert validate(replace(GOOD, net_total=None)).status is InvoiceStatus.OK
