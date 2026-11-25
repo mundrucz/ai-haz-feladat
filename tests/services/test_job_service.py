@@ -1,11 +1,11 @@
-from app.failed_files import FailedFileLog
-from app.i18n import Translator
-from app.jobs import AddOutcome, JobStatus, JobTracker
-from app.main import BASE_DIR
+from app.core.i18n import Translator
+from app.main import WEB_DIR
+from app.services.failed_file_service import FailedFileLog
+from app.services.job_service import AddOutcome, JobStatus, JobTracker
 
 
 def test_failures_are_logged_with_source_hash_upload_and_hungarian_reason(failed_log):
-    jobs = JobTracker(FailedFileLog(Translator(BASE_DIR / "locales", "hu")))
+    jobs = JobTracker(FailedFileLog(Translator(WEB_DIR / "locales", "hu")))
     jobs.record_rejection("ures.pdf", 0, "empty_file", "u1")
     jobs.record_rejection("masolat.pdf", 5, "duplicate_file", "u1", "hash-dup")
     running, _ = jobs.add("hash-run", "futo.pdf", 7, upload_id="u1")

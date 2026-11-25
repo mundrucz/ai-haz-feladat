@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
 
-from app.failed_files import SOURCE_CANCELLED, SOURCE_INTAKE, SOURCE_PROCESSING, FailedFileLog
+from app.services.failed_file_service import SOURCE_CANCELLED, SOURCE_INTAKE, SOURCE_PROCESSING, FailedFileLog
 
 MAX_FAILED_FILES = 500
 

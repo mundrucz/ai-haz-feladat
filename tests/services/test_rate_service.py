@@ -4,9 +4,10 @@ from decimal import Decimal
 
 import pytest
 
-from app.db import Database
-from app.mnb import MnbError, MnbNoRateError, MnbRateNotYetError, MnbRejectedError, RateQuote
-from app.rates import RateRepository, RateService, convert, merge_ranges, missing_ranges
+from app.clients.mnb_client import MnbError, MnbNoRateError, MnbRateNotYetError, MnbRejectedError, RateQuote
+from app.db.database import Database
+from app.repositories.rate_repository import RateRepository, merge_ranges
+from app.services.rate_service import RateService, convert, missing_ranges
 
 TODAY = date(2026, 6, 15)
 

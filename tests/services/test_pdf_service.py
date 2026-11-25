@@ -1,7 +1,7 @@
 import pytest
 from pdfs import make_blank_pdf, make_encrypted_pdf, make_pdf
 
-from app.pdf import (
+from app.services.pdf_service import (
     CorruptPdfError,
     NoTextError,
     NotAPdfError,

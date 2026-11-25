@@ -1,10 +1,10 @@
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 
-from app.api.deps import get_db, get_settings, get_templates, get_translator
-from app.config import Settings
-from app.db import Database
-from app.i18n import Translator
+from app.api.dependencies import get_db, get_settings, get_templates, get_translator
+from app.core.config import Settings
+from app.core.i18n import Translator
+from app.db.database import Database
 
 router = APIRouter()
 

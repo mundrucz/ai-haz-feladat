@@ -43,6 +43,7 @@ Számlafeldolgozó webalkalmazás: PDF számlák feltöltése, adatkinyerés, MN
 - **Függőleges szeletek:** minden változás backend + UI + teszt együtt, a végén futó, kipróbálható állapottal. Nem készítünk félkész réteget, amit nem lehet kipróbálni.
 - Kódot, tesztfuttatást és commitot csak a felhasználó kérésére végzünk.
 - Egy lépés = néhány kis, beszédes commit. Egyetlen „final" commit nem elfogadható. Ha sok változás gyűlt össze, témánként bontjuk commitokra (a tisztán mechanikus átrendezés, pl. fájlmozgatás, külön commitba kerül a tartalmi változásoktól), és minden commit önmagában is zöld tesztekkel fut.
+- Minden szöveges fájl UTF-8 (BOM nélkül). Ékezetes tartalmú szkriptet nem csövezünk PowerShellből a `python -`-ba, mert a karakterek `?`-re cserélődnek; a szkriptet UTF-8 fájlba írjuk, és úgy futtatjuk.
 - Commitot csak a felhasználó kérésére készítsünk. Az üzenet formátuma mindig `fejlesztes: {üzenet}`, rövid és tárgyszerű: mi történt, indoklás nélkül; a végén `Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>` sor.
 - A munka a `fejlesztes` branchen megy (a `main`-en csak az üres README-s `init` commit van). Csak lokálisan commitolunk, **soha nem pusholunk** (a felhasználó kifejezett kérése nélkül).
 - Nagyobb döntés vagy bizonytalanság esetén kérdezz, ne találgass.
@@ -94,7 +95,7 @@ Számlafeldolgozó webalkalmazás: PDF számlák feltöltése, adatkinyerés, MN
 ## Kód és struktúra
 
 - Nyelv: kód és azonosítók angolul; UI, README, napló, commit magyarul.
-- Kicsi, egy felelősségű modulok (pl. `pdf`, `extraction`, `validation`, `mnb`, `reporting`, `api`); a webréteg ne tartalmazzon üzleti logikát.
+- Kicsi, egy felelősségű modulok, rétegek szerinti mappákban: `core` (config, hibák, i18n, naplózás), `db`, `repositories` (csak tárolás), `clients` (külső HTTP), `services` (üzleti logika), `extraction`, `api` (webréteg, üzleti logika nélkül), `web` (sablonok, statikus és nyelvi fájlok). A tesztek ugyanezt a mappaszerkezetet követik. A fájlnév utótagja jelzi a réteget (`*_repository.py`, `*_service.py`, `*_client.py`, `*_routes.py`, `*_config.py`), a teszt neve `test_<modul>.py`. Új modul a rétegének megfelelő mappába és névvel kerül.
 - Típusannotációk; kommentet csak ott írunk, ahol a kód magától nem érthető.
 - Nincs felesleges függőség vagy előre megírt „későbbi" funkció.
 - A UI: egy oldalon feltöltés, diagram, cégenkénti táblázat, számlalista; a szám formátuma olvasható (ezres tagolás), a hibák fájlonként láthatók. A UI szövegei nyelvi fájlból jönnek (alapértelmezett: magyar), nincs beégetett szöveg a sablonokban és a kódban.

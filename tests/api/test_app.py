@@ -1,4 +1,4 @@
-from app.errors import InvalidInputError
+from app.core.errors import InvalidInputError
 
 
 def test_health_is_ok_with_working_database(client):

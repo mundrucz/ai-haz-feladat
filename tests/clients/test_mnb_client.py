@@ -5,7 +5,7 @@ from xml.sax.saxutils import escape
 import httpx
 import pytest
 
-from app.mnb import MnbClient, MnbError, MnbNoRateError, MnbRejectedError
+from app.clients.mnb_client import MnbClient, MnbError, MnbNoRateError, MnbRejectedError
 
 
 def soap_response(days: dict[str, list[tuple[str, int, str]]]) -> str:

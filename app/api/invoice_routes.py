@@ -2,10 +2,10 @@ from collections import Counter
 
 from fastapi import APIRouter, Depends
 
-from app.api.deps import get_invoice_repository, get_jobs
-from app.errors import ConflictError
-from app.invoices import InvoiceRecord, InvoiceRepository
-from app.jobs import JobTracker
+from app.api.dependencies import get_invoice_repository, get_jobs
+from app.core.errors import ConflictError
+from app.repositories.invoice_repository import InvoiceRecord, InvoiceRepository
+from app.services.job_service import JobTracker
 
 router = APIRouter(prefix="/api/invoices")
 

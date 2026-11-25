@@ -5,7 +5,7 @@ import logging
 import pytest
 from pdfs import invoice_text, make_blank_pdf, make_encrypted_pdf, make_pdf
 
-from app.jobs import MAX_FAILED_FILES, AddOutcome, JobTracker
+from app.services.job_service import MAX_FAILED_FILES, AddOutcome, JobTracker
 
 
 def upload(client, *files):
