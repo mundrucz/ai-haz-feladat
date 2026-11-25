@@ -72,8 +72,6 @@ def validate_invoice(
         _check_vat_rate(fields, source_text, warning)
     _check_dates(fields, warning, today or date.today())
 
-    if fields.performance_date is None:
-        warning("performance_date_missing", "performance_date")
     if _same_party(fields):
         warning("same_party")
     if company is not None and source_text is not None and not company.appears_in(source_text):
@@ -95,7 +93,7 @@ def _check_required(fields: InvoiceFields, error) -> None:
         error("missing_field", "seller")
     if not (fields.buyer_name or fields.buyer_tax_id):
         error("missing_field", "buyer")
-    for name in ("issue_date", "due_date", "currency", "gross_total"):
+    for name in ("issue_date", "performance_date", "due_date", "currency", "gross_total"):
         if getattr(fields, name) is None:
             error("missing_field", name)
 
