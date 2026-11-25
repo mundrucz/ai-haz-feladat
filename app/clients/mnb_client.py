@@ -4,6 +4,7 @@ import asyncio
 import logging
 import re
 import xml.etree.ElementTree as ET
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal, InvalidOperation
@@ -25,7 +26,11 @@ class MnbError(AppError):
     status_code = 502
 
 
-class MnbNoRateError(MnbError):
+class MnbRejectedError(MnbError):
+    """Az MNB érdemben elutasította a kérést (SOAP-hiba, 4xx, érvénytelen devizakód); újrapróbálni nem érdemes."""
+
+
+class MnbNoRateError(MnbRejectedError):
     code = "mnb_no_rate"
 
 
@@ -59,20 +64,30 @@ class MnbClient:
         self._max_retries = max_retries
         self._retry_delay = retry_delay
 
-    async def fetch_rates(self, currency: str, start: date, end: date) -> list[RateQuote]:
-        """A deviza napi árfolyamai az időszakban; csak a jegyzési napok szerepelnek az eredményben."""
-        if not _CURRENCY.fullmatch(currency):
-            raise MnbNoRateError(f"invalid currency code: {currency!r}")
-        envelope = _envelope(currency, start, end)
+    async def fetch_rates(self, currencies: Sequence[str], start: date, end: date) -> list[RateQuote]:
+        """A devizák napi árfolyamai az időszakban, egyetlen kéréssel; csak a jegyzési napok szerepelnek az eredményben."""
+        names = list(dict.fromkeys(currencies))
+        for currency in names:
+            if not _CURRENCY.fullmatch(currency):
+                raise MnbNoRateError(f"invalid currency code: {currency!r}")
+        if not names:
+            return []
+        envelope = _envelope(names, start, end)
         async with self._slots:
-            body = await self._post_with_retry(envelope)
-        return _parse_rates(body, currency)
+            body = await self._post_with_retry(envelope, "GetExchangeRates")
+        return _parse_rates(body, frozenset(names))
 
-    async def _post_with_retry(self, envelope: str) -> str:
+    async def fetch_currencies(self) -> frozenset[str]:
+        """Az MNB által jegyzett devizák kódjai (GetCurrencies)."""
+        async with self._slots:
+            body = await self._post_with_retry(_currencies_envelope(), "GetCurrencies")
+        return _parse_currencies(body)
+
+    async def _post_with_retry(self, envelope: str, action: str) -> str:
         attempt = 0
         while True:
             try:
-                return await self._post(envelope)
+                return await self._post(envelope, action)
             except _Transient as exc:
                 if attempt >= self._max_retries:
                     raise MnbError(str(exc)) from exc
@@ -81,14 +96,14 @@ class MnbClient:
                 logger.warning("mnb retry", extra={"attempt": attempt, "delay": delay})
                 await asyncio.sleep(delay)
 
-    async def _post(self, envelope: str) -> str:
+    async def _post(self, envelope: str, action: str) -> str:
         try:
             response = await self._http.post(
                 self._url,
                 content=envelope.encode("utf-8"),
                 headers={
                     "Content-Type": "text/xml; charset=utf-8",
-                    "SOAPAction": f'"{_NAMESPACE}MNBArfolyamServiceSoap/GetExchangeRates"',
+                    "SOAPAction": f'"{_NAMESPACE}MNBArfolyamServiceSoap/{action}"',
                 },
                 timeout=self._timeout,
             )
@@ -97,11 +112,11 @@ class MnbClient:
         except httpx.HTTPError as exc:
             raise _Transient(f"MNB request failed: {type(exc).__name__}") from exc
         if fault := _soap_fault(response.text):
-            raise MnbError(f"MNB error: {fault}")
+            raise MnbRejectedError(f"MNB error: {fault}")
         if response.status_code >= 500:
             raise _Transient(f"MNB request failed ({response.status_code})")
         if response.status_code >= 400:
-            raise MnbError(f"MNB request failed ({response.status_code})")
+            raise MnbRejectedError(f"MNB request failed ({response.status_code})")
         return response.text
 
 
@@ -109,15 +124,23 @@ class _Transient(Exception):
     pass
 
 
-def _envelope(currency: str, start: date, end: date) -> str:
+def _envelope(currencies: Sequence[str], start: date, end: date) -> str:
     return (
         '<?xml version="1.0" encoding="utf-8"?>'
         '<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/" '
         f'xmlns:web="{_NAMESPACE}"><soap:Body><web:GetExchangeRates>'
         f"<web:startDate>{start.isoformat()}</web:startDate>"
         f"<web:endDate>{end.isoformat()}</web:endDate>"
-        f"<web:currencyNames>{currency}</web:currencyNames>"
+        f"<web:currencyNames>{','.join(currencies)}</web:currencyNames>"
         "</web:GetExchangeRates></soap:Body></soap:Envelope>"
+    )
+
+
+def _currencies_envelope() -> str:
+    return (
+        '<?xml version="1.0" encoding="utf-8"?>'
+        '<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/" '
+        f'xmlns:web="{_NAMESPACE}"><soap:Body><web:GetCurrencies/></soap:Body></soap:Envelope>'
     )
 
 
@@ -145,7 +168,27 @@ def _soap_fault(text: str) -> str | None:
     return None
 
 
-def _parse_rates(body: str, currency: str) -> list[RateQuote]:
+def _parse_currencies(body: str) -> frozenset[str]:
+    envelope = _parse_xml(body)
+    result = next((e for e in envelope.iter() if _local(e.tag) == "GetCurrenciesResult"), None)
+    if result is None:
+        raise MnbError("MNB response has no GetCurrenciesResult")
+    inner_text = (result.text or "").strip()
+    codes = (
+        frozenset(
+            code
+            for element in _parse_xml(inner_text).iter()
+            if _local(element.tag) == "Curr" and _CURRENCY.fullmatch(code := (element.text or "").strip())
+        )
+        if inner_text
+        else frozenset()
+    )
+    if not codes:
+        raise MnbError("MNB response lists no currencies")
+    return codes
+
+
+def _parse_rates(body: str, currencies: frozenset[str]) -> list[RateQuote]:
     envelope = _parse_xml(body)
     result = next((e for e in envelope.iter() if _local(e.tag) == "GetExchangeRatesResult"), None)
     if result is None:
@@ -162,7 +205,8 @@ def _parse_rates(body: str, currency: str) -> list[RateQuote]:
         except ValueError:
             continue
         for rate in day:
-            if _local(rate.tag) != "Rate" or rate.get("curr") != currency or not (rate.text or "").strip():
+            currency = rate.get("curr", "")
+            if _local(rate.tag) != "Rate" or currency not in currencies or not (rate.text or "").strip():
                 continue
             try:
                 value = Decimal(rate.text.strip().replace(",", "."))

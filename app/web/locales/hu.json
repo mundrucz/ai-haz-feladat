@@ -75,8 +75,6 @@
   "ui.problem.mnb_no_rate": "Az MNB nem jegyzi ezt a devizát ezen a napon.",
 
   "ui.field.invoice_number": "számlaszám",
-  "ui.field.seller": "kiállító",
-  "ui.field.buyer": "vevő",
   "ui.field.seller_name": "kiállító neve",
   "ui.field.seller_tax_id": "kiállító adószáma",
   "ui.field.buyer_name": "vevő neve",
@@ -90,6 +88,7 @@
   "ui.field.vat_total": "ÁFA",
   "ui.issue.missing_field": "Hiányzik: {field}.",
   "ui.issue.unknown_currency": "Ismeretlen pénznem.",
+  "ui.issue.currency_not_quoted": "Az MNB nem jegyzi a számla pénznemét, ezért az összege nem váltható át.",
   "ui.issue.same_party": "A kiállító és a vevő azonos.",
   "ui.issue.company_not_found": "A saját cég nem szerepel a számlán.",
   "ui.issue.non_positive_total": "A bruttó összeg nem pozitív.",
