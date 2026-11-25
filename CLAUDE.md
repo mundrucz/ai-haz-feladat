@@ -8,7 +8,7 @@ Számlafeldolgozó webalkalmazás: PDF számlák feltöltése, adatkinyerés, MN
 
 ## Stack
 
-- Python 3.12, FastAPI, Jinja2 sablonok, SQLite (Docker volume-on, `aiosqlite`)
+- Python 3.14 (a legfrissebb, amire minden függőség települ: a PyMuPDF által behúzott `onnxruntime` 3.15-re még nem ad wheelt; a Docker-kép patch-verzióra és Debian-kiadásra rögzítve), FastAPI, Jinja2 sablonok, SQLite (Docker volume-on, `aiosqlite`)
 - PDF-szöveg: PyMuPDF
 - MNB: nyers SOAP `httpx`-szel, `xml.etree`-vel; az árfolyamok SQLite-ban cache-elve
 - LLM: OpenRouter (OpenAI-kompatibilis API), a szolgáltató URL, a modell és a kulcs környezeti változóból állítható (`OPENROUTER_MODEL` stb.); alapmodell `openai/gpt-4o-mini` (a fiók csak ZDR-végpontot enged)
