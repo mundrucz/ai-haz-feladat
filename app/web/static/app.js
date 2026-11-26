@@ -3,6 +3,7 @@
 
   const BATCH_SIZE = 10;
   const POLL_MS = 1500;
+  const REPORT_POLL_MS = 4000;
   const VISIBLE_INVOICE_ROWS = 10;
   const VISIBLE_DOCUMENT_ROWS = 10;
   const MAX_PROBLEM_ROWS = 500;
@@ -38,18 +39,26 @@
   const partnersHead = partnersTable.querySelector("thead");
   const amountHeader = document.getElementById("amount-header");
   const coverageBoxes = document.querySelectorAll("[data-coverage]");
+  const provisionalNotes = document.querySelectorAll("[data-provisional]");
   const groupButtons = document.querySelectorAll("#inv-groups [data-group]");
   const groupNote = document.getElementById("inv-group-note");
+  const pager = document.getElementById("inv-pager");
+  const prevButton = document.getElementById("inv-prev");
+  const nextButton = document.getElementById("inv-next");
+  const pageText = document.getElementById("inv-page");
+  const PAGE_SIZE = 50;
 
   const ACTIVE = new Set(["pending", "processing"]);
   let pollTimer = null;
+  let reportTimer = null;
+  let reportRunning = false;
   let uploading = false;
   let stopRequested = false;
   let deleting = false;
   let processingActive = false;
   let invoiceCount = 0;
   let currentGroup = "all";
-  let lastInvoices = null;
+  let currentOffset = 0;
 
   // Törölni csak akkor lehet, ha van mit, és nincs folyamatban feltöltés vagy feldolgozás.
   function updateDeleteButton() {
@@ -88,7 +97,8 @@
   // számlák (pl. nem elérhető MNB-árfolyam) – mindegyik az okával. A folyamatban lévők nem jelennek meg.
   function renderProblems() {
     const { documents, counts } = lastDocuments;
-    const excluded = (lastReport?.invoices ?? []).filter((item) => item.problem);
+    const excluded = lastReport?.problems ?? [];
+    const excludedCount = lastReport?.problem_count ?? 0;
     const rows = documents
       .filter((doc) => doc.status === "failed")
       .map((doc) => ({
@@ -107,7 +117,7 @@
         reason: strings[`ui.problem.${item.problem}`] ?? item.problem,
       }),
     );
-    const hidden = Math.max(0, rows.length - MAX_PROBLEM_ROWS);
+    const hidden = Math.max(0, rows.length - MAX_PROBLEM_ROWS) + excludedCount - excluded.length;
     rows.length = Math.min(rows.length, MAX_PROBLEM_ROWS);
     docsTable.hidden = rows.length === 0;
     docsBody.replaceChildren(
@@ -126,7 +136,7 @@
       ? [
           t("ui.docs.summary", {
             failed: counts.failed,
-            excluded: excluded.length,
+            excluded: excludedCount,
           }),
           hidden ? t("ui.docs.limited", { limit: MAX_PROBLEM_ROWS }) : "",
         ]
@@ -178,21 +188,23 @@
     return box;
   }
 
-  function statusCell(invoice, money) {
+  function statusCell(invoice) {
     const box = document.createElement("span");
     box.className = `inv-${invoice.status}`;
     box.textContent = t(`ui.inv.status.${invoice.status}`);
-    const tags = [money?.storno && "storno", money?.estimated && "estimated"].filter(Boolean);
+    const tags = [invoice.storno && "storno", invoice.future && "future"].filter(Boolean);
     tags.forEach((name) => {
       const tag = document.createElement("span");
       tag.className = "tag";
       tag.textContent = t(`ui.inv.tag.${name}`);
       box.append(" ", tag);
     });
-    if (invoice.issues.length) {
+    // Az info jelölést (pl. jövőbeli teljesítés) a címke mutatja, külön magyarázat nem kell.
+    const notes = invoice.issues.filter((issue) => issue.severity !== "info");
+    if (notes.length) {
       const list = document.createElement("ul");
       list.className = "notes";
-      invoice.issues.forEach((issue) => {
+      notes.forEach((issue) => {
         const item = document.createElement("li");
         item.textContent = issueText(issue);
         list.appendChild(item);
@@ -202,19 +214,11 @@
     return box;
   }
 
-  // A csoportok a kimutatás besorolását követik; a kimutatás nélkül csak az állapot és az előjel ismert.
-  const GROUP_TESTS = {
-    all: () => true,
-    storno: (invoice, money) => money?.storno ?? (invoice.gross_total ?? "").startsWith("-"),
-    future: (invoice, money) => Boolean(money?.future),
-    needs_review: (invoice) => invoice.status === "needs_review",
-  };
-
-  function renderGroups(invoices, converted) {
+  // A csoportok szűrése és elemszáma a szerveren történik; a lista lapozva érkezik.
+  function renderGroups(groups) {
     groupButtons.forEach((button) => {
       const group = button.dataset.group;
-      const count = invoices.filter((invoice) => GROUP_TESTS[group](invoice, converted.get(invoice.id))).length;
-      button.textContent = t(`ui.inv.group.${group}`, { count });
+      button.textContent = t(`ui.inv.group.${group}`, { count: groups[group] ?? 0 });
       button.setAttribute("aria-pressed", String(group === currentGroup));
     });
     const note = strings[`ui.inv.group_note.${currentGroup}`];
@@ -222,17 +226,27 @@
     groupNote.hidden = !note;
   }
 
-  function renderInvoices(data, report) {
-    lastInvoices = { data, report };
-    const { invoices, counts } = data;
-    invoiceCount = invoices.length;
+  function renderPager(data) {
+    const { offset, total } = data;
+    pager.hidden = total <= PAGE_SIZE;
+    prevButton.disabled = offset === 0;
+    nextButton.disabled = offset + PAGE_SIZE >= total;
+    pageText.textContent = t("ui.inv.page", {
+      from: (offset + 1).toLocaleString(locale),
+      to: Math.min(offset + PAGE_SIZE, total).toLocaleString(locale),
+      total: total.toLocaleString(locale),
+    });
+  }
+
+  function renderInvoices(data) {
+    const { invoices, groups, total } = data;
+    invoiceCount = groups.all;
     updateDeleteButton();
-    const converted = new Map((report?.invoices ?? []).map((item) => [item.id, item]));
-    renderGroups(invoices, converted);
-    const shown = invoices.filter((invoice) => GROUP_TESTS[currentGroup](invoice, converted.get(invoice.id)));
-    invTable.hidden = shown.length === 0;
+    renderGroups(groups);
+    renderPager(data);
+    invTable.hidden = invoices.length === 0;
     invBody.replaceChildren(
-      ...shown.map((invoice) => {
+      ...invoices.map((invoice) => {
         const row = document.createElement("tr");
         cell(row, invoice.invoice_number);
         cell(row, party(invoice.seller));
@@ -244,26 +258,18 @@
         cell(row, formatAmount(invoice.net_total), "num");
         cell(row, formatAmount(invoice.vat_total), "num");
         cell(row, formatAmount(invoice.gross_total), "num");
-        const money = converted.get(invoice.id);
-        cell(row, rateText(money));
-        cell(row, money?.rate_date ?? null);
-        cell(row, amountCell(money), "num");
+        cell(row, rateText(invoice));
+        cell(row, invoice.rate_date);
+        cell(row, amountCell(invoice), "num");
         cell(row, invoice.direction ? t(`ui.inv.direction.${invoice.direction}`) : t("ui.inv.direction.unknown"));
         cell(row, party(invoice.partner));
-        cell(row, statusCell(invoice, money));
+        cell(row, statusCell(invoice));
         return row;
       }),
     );
     limitHeight(invWrap, invBody, VISIBLE_INVOICE_ROWS);
-    invSummary.textContent = !invoices.length
-      ? t("ui.inv.empty")
-      : shown.length
-        ? t("ui.inv.summary", {
-            total: invoices.length,
-            ok: counts.ok,
-            review: counts.needs_review,
-          })
-        : t("ui.inv.group_empty");
+    invSummary.textContent = !groups.all ? t("ui.inv.empty") : total ? "" : t("ui.inv.group_empty");
+    invSummary.hidden = !invSummary.textContent;
   }
 
   // A sorok magassága változó (megjegyzések, adószám), ezért az utolsó látható sor aljáig mért magasságra korlátozunk;
@@ -289,46 +295,27 @@
     if (!money) return null;
     const box = document.createElement("span");
     box.textContent = money.amount === null ? t("ui.inv.missing") : formatAmount(String(money.amount));
-    const notes = [
-      money.estimated && ["estimated", t("ui.inv.estimated_note")],
-      money.problem && ["problem", strings[`ui.problem.${money.problem}`] ?? money.problem],
-      !money.problem && money.excluded === "needs_review" && ["problem", t("ui.inv.review_note")],
-    ].filter(Boolean);
-    notes.forEach(([className, text]) => {
+    // A jövőbeli teljesítésű számlánál az üres összeg magáért beszél (a címke az Állapot oszlopban van).
+    if (money.problem && !money.future) {
       const note = document.createElement("small");
-      note.className = className;
-      note.textContent = text;
+      note.className = "problem";
+      note.textContent = strings[`ui.problem.${money.problem}`] ?? money.problem;
       box.appendChild(note);
-    });
+    }
     return box;
   }
 
-  // A diagram és az összesítő alatt: mely számlák vannak benne, melyek maradtak ki és miért.
+  // A diagram és az összesítő alatt: hány számlát tartalmaz a kimutatás.
   function renderCoverage(report) {
     const { coverage } = report;
-    const lines = [[t("ui.report.coverage.included", { count: coverage.included }), "muted"]];
-    if (coverage.storno) lines.push([t("ui.report.coverage.storno", { count: coverage.storno }), "muted"]);
-    if (coverage.estimated) lines.push([t("ui.report.coverage.estimated", { count: coverage.estimated }), "warning"]);
-    const excluded = Object.entries(coverage.excluded)
-      .filter(([, count]) => count > 0)
-      .map(([reason, count]) => t(`ui.report.coverage.excluded.${reason}`, { count }));
-    lines.push([
-      excluded.length
-        ? t("ui.report.coverage.excluded", { items: excluded.join(", ") })
-        : t("ui.report.coverage.nothing_excluded"),
-      "muted",
-    ]);
-    const hasInvoices = report.invoices.length > 0;
+    const text = t("ui.report.coverage.included", { count: coverage.included });
+    const hasInvoices = coverage.included + Object.values(coverage.excluded).reduce((a, b) => a + b, 0) > 0;
     coverageBoxes.forEach((box) => {
       box.hidden = !hasInvoices;
-      box.replaceChildren(
-        ...lines.map(([text, className]) => {
-          const line = document.createElement("p");
-          line.className = className;
-          line.textContent = text;
-          return line;
-        }),
-      );
+      const line = document.createElement("p");
+      line.className = "muted";
+      line.textContent = text;
+      box.replaceChildren(line);
     });
   }
 
@@ -376,7 +363,7 @@
 
   function renderChart(report) {
     const { months } = report;
-    chartTitle.textContent = t("ui.report.chart_title", { currency: report.currency });
+    chartTitle.textContent = t("ui.report.chart_title");
     chartWrap.hidden = months.length === 0;
     chartEmpty.hidden = months.length > 0;
     if (!months.length || typeof Chart === "undefined") return;
@@ -415,15 +402,28 @@
     });
   }
 
+  async function fetchInvoicePage() {
+    const query = new URLSearchParams({ group: currentGroup, offset: currentOffset, limit: PAGE_SIZE });
+    const response = await fetch(`/api/invoices?${query}`);
+    if (!response.ok) return null;
+    const data = await response.json();
+    // Törlés vagy szűrés után az oldal kiürülhet: az utolsó nem üres oldalra lépünk.
+    if (!data.invoices.length && data.total > 0) {
+      currentOffset = Math.floor((data.total - 1) / PAGE_SIZE) * PAGE_SIZE;
+      return fetchInvoicePage();
+    }
+    return data;
+  }
+
   async function refreshInvoices() {
     try {
-      const [invoicesResponse, reportResponse] = await Promise.all([fetch("/api/invoices"), fetch("/api/report")]);
+      const [page, reportResponse] = await Promise.all([fetchInvoicePage(), fetch("/api/report")]);
       const report = reportResponse.ok ? await reportResponse.json() : null;
       if (report) {
         lastReport = report;
         renderProblems();
       }
-      if (invoicesResponse.ok) renderInvoices(await invoicesResponse.json(), report ?? lastReport);
+      if (page) renderInvoices(page);
       if (report) {
         renderChart(report);
         renderPartners(report);
@@ -432,6 +432,29 @@
     } catch (error) {
       // A következő frissítés újra próbálkozik.
     }
+  }
+
+  const isBusy = () => uploading || processingActive;
+
+  function showProvisional(busy) {
+    provisionalNotes.forEach((note) => {
+      note.hidden = !busy;
+    });
+  }
+
+  // Feldolgozás közben a kimutatás ritkábban (REPORT_POLL_MS) rajzolódik újra, mint a fájllista,
+  // a végén pedig egy utolsó, végleges frissítés jön.
+  async function refreshReport() {
+    clearTimeout(reportTimer);
+    reportTimer = null;
+    reportRunning = true;
+    try {
+      await refreshInvoices();
+    } finally {
+      reportRunning = false;
+    }
+    showProvisional(isBusy());
+    if (isBusy()) reportTimer = setTimeout(refreshReport, REPORT_POLL_MS);
   }
 
   async function refresh() {
@@ -445,8 +468,13 @@
       docsSummary.textContent = t("ui.docs.refresh_failed");
       active = true;
     }
-    await refreshInvoices();
-    if (active || uploading) pollTimer = setTimeout(refresh, POLL_MS);
+    if (active || uploading) {
+      showProvisional(true);
+      if (!reportTimer && !reportRunning) refreshReport();
+      pollTimer = setTimeout(refresh, POLL_MS);
+    } else {
+      await refreshReport();
+    }
   }
 
   async function sendBatch(files, uploadId) {
@@ -565,12 +593,30 @@
 
   pickButton.addEventListener("click", () => input.click());
   deleteButton.addEventListener("click", deleteInvoices);
+  async function showInvoicePage() {
+    try {
+      const page = await fetchInvoicePage();
+      if (page) renderInvoices(page);
+    } catch (error) {
+      // A következő frissítés újra próbálkozik.
+    }
+  }
+
   groupButtons.forEach((button) =>
     button.addEventListener("click", () => {
       currentGroup = button.dataset.group;
-      if (lastInvoices) renderInvoices(lastInvoices.data, lastInvoices.report);
+      currentOffset = 0;
+      showInvoicePage();
     }),
   );
+  prevButton.addEventListener("click", () => {
+    currentOffset = Math.max(0, currentOffset - PAGE_SIZE);
+    showInvoicePage();
+  });
+  nextButton.addEventListener("click", () => {
+    currentOffset += PAGE_SIZE;
+    showInvoicePage();
+  });
   stopButton.addEventListener("click", () => {
     stopRequested = true;
     stopButton.disabled = true;

@@ -336,14 +336,26 @@ def test_api_lists_stored_invoice(client, app):
     assert invoice["direction"] == "outgoing"
     assert invoice["partner"]["name"] == "Partner Kft."
     assert invoice["status"] == "ok"
+    assert (invoice["amount"], invoice["excluded"]) == (1270, None)
     assert body["counts"] == {"ok": 1, "needs_review": 0}
 
 
 def test_api_is_empty_without_invoices(client):
     assert client.get("/api/invoices").json() == {
         "invoices": [],
+        "group": "all",
+        "offset": 0,
+        "limit": 50,
+        "total": 0,
+        "groups": {"all": 0, "storno": 0, "future": 0, "needs_review": 0},
         "counts": {"ok": 0, "needs_review": 0},
     }
+
+
+def test_api_rejects_too_large_page(client):
+    assert client.get("/api/invoices?limit=201").status_code == 422
+    assert client.get("/api/invoices?offset=-1").status_code == 422
+    assert client.get("/api/invoices?group=unknown").status_code == 422
 
 
 def test_index_page_contains_invoice_table(client):
