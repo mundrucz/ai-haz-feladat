@@ -29,14 +29,12 @@ def failed_log():
 
 @pytest.fixture
 def settings(tmp_path: Path) -> Settings:
-    return make_settings(
-        database_path=tmp_path / "test.db",
-        openrouter_api_key=None,
-    )
+    return make_settings(database_path=tmp_path / "test.db", openrouter_api_key=None)
 
 
 @pytest.fixture
 def app(settings: Settings):
+    """LLM-kulcs nélkül: a tesztek nem hívnak LLM-et, a szöveges PDF-ek `llm_not_configured` hibát kapnak."""
     return create_app(settings)
 
 
