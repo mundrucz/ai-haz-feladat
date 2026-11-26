@@ -1,0 +1,113 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card">
+  <dl class="facts">
+    <dt>{{ t("home.company") }}</dt><dd>{{ settings.company_name }}</dd>
+    <dt>{{ t("home.tax_number") }}</dt><dd>{{ settings.company_tax_number }}</dd>
+    <dt>{{ t("home.report_currency") }}</dt><dd>{{ settings.report_currency }}</dd>
+  </dl>
+</section>
+
+<section class="card" id="upload-card">
+  <h2>{{ t("ui.upload.title") }}</h2>
+  <div id="dropzone" class="dropzone" tabindex="0">
+    <p>{{ t("ui.upload.hint") }}</p>
+    <button type="button" id="pick-button" class="button">{{ t("ui.upload.button") }}</button>
+    <button type="button" id="stop-button" class="button secondary" hidden>{{ t("ui.upload.stop") }}</button>
+    <input type="file" id="file-input" accept="application/pdf,.pdf" multiple hidden>
+  </div>
+  <p id="upload-status" class="muted" role="status"></p>
+  <p id="upload-warning" class="warning" role="alert" hidden>{{ t("ui.upload.leave_warning") }}</p>
+</section>
+
+<section class="card">
+  <h2 id="chart-title"></h2>
+  <p class="provisional" data-provisional role="status" hidden>{{ t("ui.report.provisional") }}</p>
+  <p id="chart-empty" class="muted" role="status">{{ t("ui.report.chart_empty") }}</p>
+  <div class="chart-wrap" id="chart-wrap" hidden>
+    <canvas id="cashflow-chart" role="img" aria-label="{{ t('ui.report.chart_label') }}"></canvas>
+  </div>
+  <div class="coverage" data-coverage hidden></div>
+</section>
+
+<section class="card">
+  <h2 id="partners-title"></h2>
+  <p class="provisional" data-provisional role="status" hidden>{{ t("ui.report.provisional") }}</p>
+  <p id="partners-empty" class="muted" role="status">{{ t("ui.report.partners_empty") }}</p>
+  <div class="table-wrap">
+    <table id="partners-table" class="partners" hidden>
+      <thead></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+  <div class="coverage" data-coverage hidden></div>
+</section>
+
+<section class="card">
+  <div class="card-head">
+    <h2>{{ t("ui.inv.title") }}</h2>
+    <button type="button" id="delete-button" class="button danger" disabled>{{ t("ui.inv.delete") }}</button>
+  </div>
+  <div id="inv-groups" class="groups" role="group" aria-label="{{ t('ui.inv.groups_label') }}">
+    {% for group in ("all", "storno", "future", "needs_review") %}
+    <button type="button" class="group" data-group="{{ group }}" aria-pressed="{{ 'true' if group == 'all' else 'false' }}"></button>
+    {% endfor %}
+  </div>
+  <p class="provisional" data-provisional role="status" hidden>{{ t("ui.report.provisional") }}</p>
+  <p id="inv-group-note" class="muted" hidden></p>
+  <p id="inv-summary" class="muted" role="status"></p>
+  <p id="inv-notice" class="muted" role="status" hidden></p>
+  <div class="table-wrap scroll-wrap" id="inv-wrap">
+    <table id="inv-table" class="invoices" hidden>
+      <thead>
+        <tr>
+          <th>{{ t("ui.inv.col.number") }}</th>
+          <th>{{ t("ui.inv.col.seller") }}</th>
+          <th>{{ t("ui.inv.col.buyer") }}</th>
+          <th>{{ t("ui.inv.col.issue_date") }}</th>
+          <th>{{ t("ui.inv.col.performance_date") }}</th>
+          <th>{{ t("ui.inv.col.due_date") }}</th>
+          <th>{{ t("ui.inv.col.currency") }}</th>
+          <th class="num">{{ t("ui.inv.col.net") }}</th>
+          <th class="num">{{ t("ui.inv.col.vat") }}</th>
+          <th class="num">{{ t("ui.inv.col.gross") }}</th>
+          <th>{{ t("ui.inv.col.rate") }}</th>
+          <th>{{ t("ui.inv.col.rate_date") }}</th>
+          <th class="num" id="amount-header"></th>
+          <th>{{ t("ui.inv.col.direction") }}</th>
+          <th>{{ t("ui.inv.col.partner") }}</th>
+          <th>{{ t("ui.inv.col.status") }}</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+  <nav id="inv-pager" class="pager" aria-label="{{ t('ui.inv.pager_label') }}" hidden>
+    <button type="button" class="button" id="inv-prev">{{ t("ui.inv.prev") }}</button>
+    <span id="inv-page" class="muted"></span>
+    <button type="button" class="button" id="inv-next">{{ t("ui.inv.next") }}</button>
+  </nav>
+</section>
+
+<section class="card">
+  <h2>{{ t("ui.docs.title") }}</h2>
+  <p id="docs-summary" class="muted" role="status"></p>
+  <div class="table-wrap scroll-wrap" id="docs-wrap">
+    <table id="docs-table" hidden>
+      <thead>
+        <tr>
+          <th>{{ t("ui.docs.col.file") }}</th>
+          <th>{{ t("ui.docs.col.status") }}</th>
+          <th>{{ t("ui.docs.col.uploaded") }}</th>
+          <th>{{ t("ui.docs.col.message") }}</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+</section>
+
+<script id="i18n-data" type="application/json">{{ strings | tojson }}</script>
+<script src="{{ asset('vendor/chart.umd.js') }}" defer></script>
+<script src="{{ asset('app.js') }}" defer></script>
+{% endblock %}

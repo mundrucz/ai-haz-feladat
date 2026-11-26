@@ -1,7 +1,25 @@
+# Titkok és helyi konfiguráció
 .env
+# A feladatleírás API-kulcsot tartalmaz
+FELADAT.md
+
+# Adatok és naplók
+data/
+logs/
+*.db
+*.db-wal
+*.db-shm
+
+# Python
 .venv/
 __pycache__/
-.pytest_cache/
-data/
 *.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+
+# IDE / OS
 .idea/
+.vscode/
+*.iml
+.DS_Store

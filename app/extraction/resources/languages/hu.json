@@ -1,0 +1,19 @@
+{
+  "months": [
+    ["január"],
+    ["február"],
+    ["március"],
+    ["április"],
+    ["május"],
+    ["június"],
+    ["július"],
+    ["augusztus"],
+    ["szeptember"],
+    ["október"],
+    ["november"],
+    ["december"]
+  ],
+  "labels": {
+    "vat_total": ["áfa összesen", "áfa érték", "összes áfa", "áfa összeg", "áfa tartalom", "áfa", "afa", "általános forgalmi adó", "áfa összege", "adó összesen", "adó", "forgalmi adó"]
+  }
+}

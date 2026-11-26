@@ -1,0 +1,7 @@
+{
+  "HUF": {"symbols": ["Ft"], "names": ["forint"]},
+  "EUR": {"symbols": ["€"], "names": ["euro"]},
+  "USD": {"symbols": ["$", "US$"], "names": []},
+  "GBP": {"symbols": ["£"], "names": []},
+  "PLN": {"symbols": ["zł"], "names": ["zloty", "złoty"]}
+}

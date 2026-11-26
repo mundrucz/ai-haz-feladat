@@ -1,0 +1,13 @@
+.git
+.idea
+.venv
+__pycache__
+*.pyc
+.pytest_cache
+.env
+data
+logs
+tests
+FELADAT.md
+AI_NAPLO.md
+CLAUDE.md
