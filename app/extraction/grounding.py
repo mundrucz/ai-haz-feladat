@@ -49,9 +49,10 @@ def ungrounded_fields(fields: InvoiceFields, text: str) -> tuple[str, ...]:
 
     if any(getattr(fields, name) for name in _DATE_FIELDS):
         dates = _dates_in(text)
+        loose = _unknown_month_dates(text)
         for name in _DATE_FIELDS:
             value = getattr(fields, name)
-            if value is not None and value not in dates:
+            if value is not None and value not in dates and (value.year, value.day) not in loose:
                 wrong.add(name)
 
     if any(getattr(fields, name) for name in _AMOUNT_FIELDS):
@@ -114,6 +115,26 @@ def _dates_in(text: str) -> set[date]:
     return found
 
 
+def _unknown_month_dates(text: str) -> set[tuple[int, int]]:
+    """(év, nap) párok a fel nem vett nyelvű hónapneves dátumokból (`15 maart 2026`, `maart 15 2026`, `2026 maart 15`).
+
+    A hónapot így nem tudjuk ellenőrizni, csak a napot és az évet; a dátumok összefüggését a validáció nézi.
+    """
+    tokens = _WORD_OR_NUMBER.findall(normalize_text(text))
+    found: set[tuple[int, int]] = set()
+    for a, b, c in zip(tokens, tokens[1:], tokens[2:]):
+        if parse_date(f"{a} {b} {c}") is not None:
+            continue  # felvett hónapnév: a pontos dátum már a `_dates_in`-ben van
+        for day, word, year in ((a, b, c), (b, a, c), (c, b, a)):
+            if word.isalpha() and len(word) >= 3 and _is_day(day) and len(year) == 4 and year.isdigit():
+                found.add((int(year), int(day)))
+    return found
+
+
+def _is_day(token: str) -> bool:
+    return token.isdigit() and len(token) <= 2 and 1 <= int(token) <= 31
+
+
 def _amounts_in(text: str) -> set[Decimal]:
     found: set[Decimal] = set()
     for hint in (None, ",", "."):
@@ -122,4 +143,5 @@ def _amounts_in(text: str) -> set[Decimal]:
 
 
 def _currency_in(code: str, text: str) -> bool:
-    return any(code in currency_candidates(token) for token in set(_CURRENCY_TOKEN.findall(text)))
+    """A kód betű szerint, vagy egy felvett deviza jele/neve a szövegben (a nem felvett deviza csak kóddal ellenőrizhető)."""
+    return any(token == code or code in currency_candidates(token) for token in set(_CURRENCY_TOKEN.findall(text)))

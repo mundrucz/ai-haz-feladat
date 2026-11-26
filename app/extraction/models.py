@@ -28,6 +28,3 @@ class InvoiceFields:
     @classmethod
     def names(cls) -> tuple[str, ...]:
         return tuple(f.name for f in fields(cls))
-
-    def filled(self) -> dict[str, object]:
-        return {name: value for name in self.names() if (value := getattr(self, name)) is not None}
