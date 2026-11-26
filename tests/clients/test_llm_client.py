@@ -132,6 +132,18 @@ async def test_client_maps_timeout_and_connection_errors():
         await make_client(handler, max_retries=0).complete_json("s", "u")
 
 
+async def test_client_sends_separate_connect_and_read_timeouts():
+    seen = {}
+
+    def handler(request):
+        seen.update(request.extensions["timeout"])
+        return httpx.Response(200, json=chat_body({"ok": True}))
+
+    await make_client(handler, timeout=15, connect_timeout=5).complete_json("s", "u")
+
+    assert (seen["connect"], seen["read"]) == (5, 15)
+
+
 async def test_client_does_not_retry_a_misconfigured_url():
     calls = []
 

@@ -56,14 +56,15 @@ class MnbClient:
         http: httpx.AsyncClient,
         *,
         url: str,
-        timeout: float = 20.0,
+        timeout: float = 5.0,
+        connect_timeout: float = 5.0,
         concurrency: int = 2,
         max_retries: int = 2,
         retry_delay: float = 1.0,
     ) -> None:
         self._http = http
         self._url = url
-        self._timeout = timeout
+        self._timeout = httpx.Timeout(timeout, connect=connect_timeout)
         self._slots = asyncio.Semaphore(max(1, concurrency))
         self._max_retries = max_retries
         self._retry_delay = retry_delay
