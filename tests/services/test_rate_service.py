@@ -4,7 +4,7 @@ from decimal import Decimal
 
 import pytest
 
-from app.clients.mnb_client import MnbError, MnbNoRateError, MnbRateNotYetError, MnbRejectedError, RateQuote
+from app.clients.mnb_client import MnbError, MnbNoRateError, MnbRejectedError, RateQuote
 from app.db.database import Database
 from app.repositories.rate_repository import RateRepository, merge_ranges
 from app.services.rate_service import RateService, convert, missing_ranges
@@ -89,18 +89,20 @@ async def test_no_rate_within_lookback_is_reported(repository):
     rates = service(repository, FakeSource())
     await rates.prepare({"EUR": (d(10, 3), d(10, 3))})
     with pytest.raises(MnbNoRateError):
-        await rates.rate_on("EUR", d(10, 8))
+        await rates.rate_on("EUR", d(10, 5))
 
 
-async def test_far_future_day_reports_rate_not_yet(repository):
+async def test_far_future_day_uses_todays_latest_rate(repository):
     source = FakeSource()
     rates = service(repository, source)
-    far_future = TODAY + timedelta(days=32)
+    far_future = TODAY + timedelta(days=400)
 
     assert await rates.prepare({"EUR": (far_future, far_future)}) == {}
-    with pytest.raises(MnbRateNotYetError):
-        await rates.rate_on("EUR", far_future)
-    assert source.calls == []
+    quote = await rates.rate_on("EUR", far_future)
+
+    assert quote.rate_date == TODAY
+    assert [(start, end) for _, start, end in source.calls] == [(TODAY - timedelta(days=31), TODAY)]
+    assert await rates.stored_rate_on("EUR", far_future) is None  # a mai nap még nincs lezárva
 
 
 async def test_near_future_day_uses_latest_rate(repository):
@@ -349,11 +351,11 @@ async def test_today_is_not_marked_covered_so_it_can_be_refetched(repository):
     assert source.calls[-1][1:] == (TODAY, TODAY)
 
 
-async def test_future_dates_are_not_requested(repository):
+async def test_future_dates_are_requested_only_up_to_today(repository):
     source = FakeSource()
     rates = service(repository, source)
     await rates.prepare({"EUR": (date(2027, 1, 1), date(2027, 1, 31))})
-    assert source.calls == []
+    assert [(start, end) for _, start, end in source.calls] == [(TODAY - timedelta(days=31), TODAY)]
 
 
 async def test_unit_is_kept_with_stored_rate(repository):

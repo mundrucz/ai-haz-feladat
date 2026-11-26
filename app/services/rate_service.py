@@ -8,7 +8,7 @@ from datetime import date, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Protocol
 
-from app.clients.mnb_client import MnbNoRateError, MnbRateNotYetError, MnbRejectedError, RateQuote
+from app.clients.mnb_client import MnbNoRateError, MnbRejectedError, RateQuote
 from app.core.errors import AppError
 from app.repositories.rate_repository import RateRepository, SupportedCurrencies, merge_ranges
 
@@ -46,7 +46,10 @@ def missing_ranges(start: date, end: date, covered: Iterable[tuple[date, date]])
 
 
 class RateService:
-    """Árfolyam-kiválasztás: a teljesítés napján érvényes, vagy az azt megelőző utolsó jegyzés."""
+    """Árfolyam-kiválasztás: a teljesítés napján érvényes, vagy az azt megelőző utolsó jegyzés.
+
+    Jövőbeli napra a legutóbbi (mai) jegyzés jár: ez becslés, a nap elérkeztével a valódi árfolyam váltja.
+    """
 
     def __init__(
         self,
@@ -117,9 +120,7 @@ class RateService:
         failures: dict[str, AppError] = {}
         today = self._today()
         wanted = {
-            currency: (first - self._lookback, min(last, today))
-            for currency, (first, last) in needs.items()
-            if first - self._lookback <= min(last, today)
+            currency: (min(first, today) - self._lookback, min(last, today)) for currency, (first, last) in needs.items()
         }
         if not wanted:
             return failures
@@ -147,9 +148,8 @@ class RateService:
         return failures
 
     async def rate_on(self, currency: str, day: date) -> RateQuote:
+        day = min(day, self._today())
         earliest = day - self._lookback
-        if earliest > self._today():
-            raise MnbRateNotYetError(f"no MNB rate yet for {currency} on {day.isoformat()}: the date is in the future")
         quote = await self._repository.latest_on_or_before(currency, day, earliest)
         if quote is None:
             raise MnbNoRateError(f"no MNB rate for {currency} on or before {day.isoformat()}")
@@ -157,6 +157,7 @@ class RateService:
 
     async def stored_rate_on(self, currency: str, day: date) -> RateQuote | None:
         """A tárolt árfolyam, ha a jegyzés napjától `day`-ig minden nap le van kérve (így MNB nélkül is biztos)."""
+        day = min(day, self._today())
         earliest = day - self._lookback
         quote = await self._repository.latest_on_or_before(currency, day, earliest)
         start = quote.rate_date if quote else earliest

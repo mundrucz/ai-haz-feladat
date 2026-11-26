@@ -70,14 +70,17 @@ async def setup(tmp_path):
     return db, InvoiceRepository(db)
 
 
+TODAY = date(2026, 6, 15)
+
+
 def make_report(db, invoices, source, failure_log=None) -> ReportService:
-    rates = RateService(RateRepository(db), source, today=lambda: date(2026, 6, 15))
-    return ReportService(invoices, rates, "HUF", failure_log)
+    rates = RateService(RateRepository(db), source, today=lambda: TODAY)
+    return ReportService(invoices, rates, "HUF", failure_log, today=lambda: TODAY)
 
 
-async def add(invoices, number: str, invoice_fields: InvoiceFields) -> None:
+async def add(invoices, number: str, invoice_fields: InvoiceFields, status: str = "ok") -> None:
     await invoices.save(
-        f"hash-{number}", f"{number}.pdf", invoice_fields, classify(invoice_fields, COMPANY), "ok", []
+        f"hash-{number}", f"{number}.pdf", invoice_fields, classify(invoice_fields, COMPANY), status, []
     )
 
 
@@ -193,16 +196,64 @@ async def test_currency_unknown_to_mnb_is_reported_not_guessed(setup):
     assert report["months"] == []
 
 
-async def test_far_future_performance_date_has_its_own_problem_code(setup):
+async def test_future_performance_date_is_converted_at_todays_rate_and_marked_estimated(setup):
     db, invoices = setup
-    await add(invoices, "F", fields(invoice_number="F", currency="EUR", performance_date=date(2026, 8, 1)))
+    await add(
+        invoices,
+        "F",
+        fields(invoice_number="F", currency="EUR", performance_date=date(2027, 8, 1), due_date=date(2027, 8, 31)),
+    )
+    await add(invoices, "H", fields(invoice_number="H", performance_date=date(2026, 7, 1)))
+    await add(invoices, "P", fields(invoice_number="P"))
     source = FixedSource({"EUR": (1, "400")})
 
     report = await make_report(db, invoices, source).build()
 
-    assert (row(report, "F")["amount"], row(report, "F")["problem"]) == (None, "mnb_rate_not_yet")
-    assert source.calls == []
-    assert report["months"] == []
+    future = row(report, "F")
+    assert (future["amount"], future["problem"], future["rate_date"]) == (508000, None, "2026-05-15")
+    assert (future["future"], future["estimated"], future["excluded"]) == (True, True, None)
+    assert (row(report, "H")["future"], row(report, "H")["estimated"]) == (True, False)
+    assert (row(report, "P")["future"], row(report, "P")["estimated"]) == (False, False)
+    assert report["months"][-1] == {"month": "2027-08", "incoming": 0, "outgoing": 508000}
+    assert report["coverage"]["estimated"] == 1
+    assert report["groups"]["future"] == 2
+
+
+async def test_storno_is_summed_with_its_negative_amount(setup):
+    db, invoices = setup
+    await add(invoices, "A", fields(invoice_number="A", gross_total=Decimal("1270")))
+    await add(invoices, "S", fields(invoice_number="S", gross_total=Decimal("-1270"), net_total=None, vat_total=None))
+
+    report = await make_report(db, invoices, FixedSource({})).build()
+
+    assert (row(report, "S")["storno"], row(report, "S")["amount"], row(report, "S")["excluded"]) == (True, -1270, None)
+    assert report["months"] == [{"month": "2026-02", "incoming": 0, "outgoing": 0}]
+    assert report["total_outgoing"] == 0
+    assert (report["coverage"]["included"], report["coverage"]["storno"]) == (2, 1)
+    assert report["groups"]["storno"] == 1
+
+
+async def test_invoice_needing_review_is_listed_but_left_out_of_chart_and_summary(setup):
+    db, invoices = setup
+    await add(invoices, "OK", fields(invoice_number="OK", gross_total=Decimal("1000")))
+    await add(invoices, "R", fields(invoice_number="R", gross_total=Decimal("5000")), status="needs_review")
+
+    report = await make_report(db, invoices, FixedSource({})).build()
+
+    assert (row(report, "R")["amount"], row(report, "R")["excluded"], row(report, "R")["problem"]) == (
+        5000,
+        "needs_review",
+        None,
+    )
+    assert report["months"][0]["outgoing"] == 1000
+    assert report["total_outgoing"] == 1000
+    assert report["coverage"] == {
+        "included": 1,
+        "storno": 0,
+        "estimated": 0,
+        "excluded": {"needs_review": 1, "no_rate": 0, "no_direction": 0},
+    }
+    assert report["groups"] == {"all": 2, "storno": 0, "future": 0, "needs_review": 1}
 
 
 async def test_invoice_without_direction_is_listed_but_not_summed(setup):
@@ -257,6 +308,8 @@ def test_static_assets_are_versioned_so_browsers_do_not_serve_stale_scripts(clie
 def test_index_page_serves_vendored_chart_library_and_report_sections(client):
     html = client.get("/").text
     assert 'id="cashflow-chart"' in html and 'id="partners-table"' in html
+    assert html.count("data-coverage") == 2
+    assert all(f'data-group="{group}"' in html for group in ("all", "storno", "future", "needs_review"))
     script = client.get("/static/vendor/chart.umd.js")
     assert script.status_code == 200 and "Chart.js" in script.text[:400]
     assert "cdn" not in html.lower()

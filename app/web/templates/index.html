@@ -26,6 +26,7 @@
   <div class="chart-wrap" id="chart-wrap" hidden>
     <canvas id="cashflow-chart" role="img" aria-label="{{ t('ui.report.chart_label') }}"></canvas>
   </div>
+  <div class="coverage" data-coverage hidden></div>
 </section>
 
 <section class="card">
@@ -37,6 +38,7 @@
       <tbody></tbody>
     </table>
   </div>
+  <div class="coverage" data-coverage hidden></div>
 </section>
 
 <section class="card">
@@ -44,6 +46,12 @@
     <h2>{{ t("ui.inv.title") }}</h2>
     <button type="button" id="delete-button" class="button danger" disabled>{{ t("ui.inv.delete") }}</button>
   </div>
+  <div id="inv-groups" class="groups" role="group" aria-label="{{ t('ui.inv.groups_label') }}">
+    {% for group in ("all", "storno", "future", "needs_review") %}
+    <button type="button" class="group" data-group="{{ group }}" aria-pressed="{{ 'true' if group == 'all' else 'false' }}"></button>
+    {% endfor %}
+  </div>
+  <p id="inv-group-note" class="muted" hidden></p>
   <p id="inv-summary" class="muted" role="status"></p>
   <p id="inv-notice" class="muted" role="status" hidden></p>
   <div class="table-wrap scroll-wrap" id="inv-wrap">
