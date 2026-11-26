@@ -1,4 +1,12 @@
-from app.db.database import Database
+import pytest
+from alembic.autogenerate import compare_metadata
+from alembic.migration import MigrationContext
+from alembic.script import ScriptDirectory
+from sqlalchemy import text
+
+from app.db import database
+from app.db.database import MIGRATIONS_DIR, Database
+from app.db.tables import Base
 
 
 async def test_init_creates_database_and_is_idempotent(tmp_path):
@@ -10,22 +18,45 @@ async def test_init_creates_database_and_is_idempotent(tmp_path):
     assert await db.ping() is True
 
 
-async def test_pending_migrations_are_applied_once(tmp_path):
+async def test_migrations_build_exactly_the_orm_schema(tmp_path):
     db = Database(tmp_path / "app.db")
-    migrations = [(1, "CREATE TABLE a (id INTEGER PRIMARY KEY);")]
-    await db.init(migrations)
+    await db.init()
 
-    migrations.append((2, "CREATE TABLE b (id INTEGER PRIMARY KEY);"))
-    await db.init(migrations)
-    await db.init(migrations)
+    async with db.engine.connect() as conn:
+        revision = await conn.run_sync(lambda c: MigrationContext.configure(c).get_current_revision())
+        differences = await conn.run_sync(lambda c: compare_metadata(MigrationContext.configure(c), Base.metadata))
 
-    async with db.connect() as conn:
-        async with conn.execute("SELECT version FROM schema_migrations ORDER BY version") as cursor:
-            versions = [row["version"] async for row in cursor]
-        async with conn.execute("SELECT name FROM sqlite_master WHERE name IN ('a', 'b')") as cursor:
-            tables = {row["name"] async for row in cursor}
-    assert versions == [1, 2]
-    assert tables == {"a", "b"}
+    assert revision == ScriptDirectory(str(MIGRATIONS_DIR)).get_current_head()
+    assert differences == []
+
+
+async def test_failed_migration_leaves_no_partial_schema(tmp_path, monkeypatch):
+    def broken_upgrade(connection):
+        connection.exec_driver_sql("CREATE TABLE half_done (id INTEGER)")
+        raise RuntimeError("migration failed")
+
+    monkeypatch.setattr(database, "_upgrade_to_head", broken_upgrade)
+    db = Database(tmp_path / "app.db")
+
+    with pytest.raises(RuntimeError):
+        await db.init()
+
+    async with db.session() as session:
+        tables = (await session.scalars(text("SELECT name FROM sqlite_master WHERE type = 'table'"))).all()
+    assert "half_done" not in tables
+
+
+async def test_transaction_rolls_back_on_error(tmp_path):
+    db = Database(tmp_path / "app.db")
+    await db.init()
+
+    with pytest.raises(RuntimeError):
+        async with db.transaction(immediate=True) as session:
+            await session.execute(text("INSERT INTO mnb_currencies (code, fetched_on) VALUES ('EUR', '2026-01-01')"))
+            raise RuntimeError("stop")
+
+    async with db.session() as session:
+        assert (await session.scalars(text("SELECT code FROM mnb_currencies"))).all() == []
 
 
 async def test_ping_reports_failure_instead_of_raising(tmp_path):

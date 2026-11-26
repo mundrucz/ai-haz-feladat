@@ -1,4 +1,5 @@
 from app.core.errors import InvalidInputError
+from app.db.database import Database
 
 
 def test_health_is_ok_with_working_database(client):
@@ -9,7 +10,7 @@ def test_health_is_ok_with_working_database(client):
 
 
 def test_health_reports_degraded_when_database_is_down(client, app, tmp_path):
-    app.state.db.path = tmp_path / "gone" / "app.db"
+    app.state.db = Database(tmp_path / "gone" / "app.db")
 
     response = client.get("/health")
 
