@@ -11,7 +11,7 @@ from app.extraction.company import Company
 from app.extraction.labels import Labels, make_lines
 from app.extraction.line_items import check_line_items
 from app.extraction.models import InvoiceFields
-from app.extraction.normalize import is_known_currency, normalize_key
+from app.extraction.normalize import is_currency_code, normalize_key
 
 _MIN_YEAR = 2000
 _MAX_YEARS_AHEAD = 5
@@ -55,7 +55,10 @@ def validate_invoice(
     source_text: str | None = None,
     today: date | None = None,
 ) -> ValidationResult:
-    """Hibák (hiányzó kötelező mező) → INVALID; gyanús értékek → NEEDS_REVIEW; különben OK."""
+    """Hibák (érvénytelen érték) → INVALID; gyanús értékek → NEEDS_REVIEW; különben OK.
+
+    A kötelező mezők meglétét a hívó (`InvoiceAnalyzer`) a validáció előtt ellenőrzi.
+    """
     issues: list[Issue] = []
 
     def error(code: str, field: str | None = None) -> None:
@@ -64,8 +67,7 @@ def validate_invoice(
     def warning(code: str, field: str | None = None) -> None:
         issues.append(Issue(code, field, Severity.WARNING))
 
-    _check_required(fields, error)
-    if fields.currency and not is_known_currency(fields.currency):
+    if fields.currency and not is_currency_code(fields.currency):
         error("unknown_currency", "currency")
 
     _check_totals(fields, warning)
@@ -86,23 +88,6 @@ def validate_invoice(
     else:
         status = InvoiceStatus.OK
     return ValidationResult(status, tuple(issues))
-
-
-def _check_required(fields: InvoiceFields, error) -> None:
-    for name in (
-        "invoice_number",
-        "seller_name",
-        "seller_tax_id",
-        "buyer_name",
-        "buyer_tax_id",
-        "issue_date",
-        "performance_date",
-        "due_date",
-        "currency",
-        "gross_total",
-    ):
-        if getattr(fields, name) in (None, ""):
-            error("missing_field", name)
 
 
 def _check_totals(fields: InvoiceFields, warning) -> None:
@@ -149,7 +134,7 @@ def _stated_vat_rates(text: str) -> list[Decimal]:
     lines = make_lines(unicodedata.normalize("NFKC", text))
     rates: set[Decimal] = set()
     for index, line in enumerate(lines):
-        if not labels.find(line, ["vat_total"]):
+        if not labels.contains(line, "vat_total"):
             continue
         scanned = [line]
         if not line.has_digit and index + 1 < len(lines):

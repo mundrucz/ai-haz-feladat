@@ -38,42 +38,14 @@ def test_complete_invoice_is_ok():
     assert result.issues == ()
 
 
-def test_each_required_field_is_an_error():
-    required = (
-        "invoice_number",
-        "seller_name",
-        "seller_tax_id",
-        "buyer_name",
-        "buyer_tax_id",
-        "issue_date",
-        "performance_date",
-        "due_date",
-        "currency",
-        "gross_total",
-    )
-    for name in required:
-        result = validate(replace(GOOD, **{name: None}))
-        assert result.status is InvoiceStatus.INVALID
-        assert ("missing_field", name) in codes(result)
-
-
-def test_party_tax_id_is_required_even_when_the_name_is_known():
-    for name in ("seller_tax_id", "buyer_tax_id"):
-        result = validate(replace(GOOD, **{name: ""}))
-        assert result.status is InvoiceStatus.INVALID
-        assert ("missing_field", name) in codes(result)
-
-
-def test_unknown_currency_is_an_error():
-    result = validate(replace(GOOD, currency="XYZ"))
+def test_currency_that_is_not_an_iso_code_is_an_error():
+    result = validate(replace(GOOD, currency="EURO"))
     assert result.status is InvoiceStatus.INVALID
     assert ("unknown_currency", "currency") in codes(result)
 
 
-def test_missing_performance_date_is_an_error():
-    result = validate(replace(GOOD, performance_date=None))
-    assert result.status is InvoiceStatus.INVALID
-    assert codes(result) == {("missing_field", "performance_date")}
+def test_unlisted_but_well_formed_currency_is_left_to_the_rate_source():
+    assert validate(replace(GOOD, currency="JPY")).status is InvoiceStatus.OK
 
 
 def test_totals_mismatch():
@@ -209,13 +181,11 @@ def test_company_must_appear_in_source_text():
 
 
 def test_errors_take_precedence_over_warnings():
-    result = validate(replace(GOOD, invoice_number=None, vat_total=Decimal("100.00")))
+    result = validate(replace(GOOD, currency="EURO", vat_total=Decimal("100.00")))
     assert result.status is InvoiceStatus.INVALID
     assert {issue.severity for issue in result.issues} == {Severity.ERROR, Severity.WARNING}
 
 
-def test_filled_and_issue_dict():
-    assert InvoiceFields().filled() == {}
-    assert GOOD.filled()["currency"] == "EUR"
-    issue = validate(replace(GOOD, invoice_number=None)).issues[0]
-    assert issue.as_dict() == {"code": "missing_field", "field": "invoice_number", "severity": "error"}
+def test_issue_dict():
+    issue = validate(replace(GOOD, currency="EURO")).issues[0]
+    assert issue.as_dict() == {"code": "unknown_currency", "field": "currency", "severity": "error"}
