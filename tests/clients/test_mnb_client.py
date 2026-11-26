@@ -116,6 +116,44 @@ async def test_persistent_failure_raises_after_retries():
     assert len(attempts) == 3
 
 
+@pytest.mark.parametrize("status", [408, 429, 502, 503, 504])
+async def test_transient_status_is_retried(status):
+    attempts = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        attempts.append(1)
+        return httpx.Response(status, text="busy")
+
+    with pytest.raises(MnbError):
+        await client_for(handler, max_retries=2).fetch_rates(["EUR"], date(2026, 1, 1), date(2026, 1, 2))
+    assert len(attempts) == 3
+
+
+@pytest.mark.parametrize(("status", "error"), [(400, MnbRejectedError), (404, MnbRejectedError), (501, MnbError)])
+async def test_permanent_status_is_not_retried(status, error):
+    attempts = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        attempts.append(1)
+        return httpx.Response(status, text="no")
+
+    with pytest.raises(error):
+        await client_for(handler, max_retries=2).fetch_rates(["EUR"], date(2026, 1, 1), date(2026, 1, 2))
+    assert len(attempts) == 1
+
+
+async def test_misconfigured_url_is_not_retried():
+    attempts = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        attempts.append(1)
+        raise httpx.UnsupportedProtocol("unknown scheme")
+
+    with pytest.raises(MnbError):
+        await client_for(handler, max_retries=2).fetch_rates(["EUR"], date(2026, 1, 1), date(2026, 1, 2))
+    assert len(attempts) == 1
+
+
 async def test_soap_fault_is_an_error_and_not_retried():
     attempts = []
     fault = (

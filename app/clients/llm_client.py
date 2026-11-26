@@ -1,4 +1,7 @@
-"""OpenAI-kompatibilis (OpenRouter) csevegő-kliens: aszinkron, korlátozott párhuzamosságú, a hibákat kódokra képezi le."""
+"""OpenAI-kompatibilis (OpenRouter) LLM-kliens.
+
+Aszinkron, korlátozott párhuzamosságú, csak átmeneti hibánál próbál újra, és a hibákat kódokra képezi le.
+"""
 
 import asyncio
 import json
@@ -12,7 +15,9 @@ from app.core.errors import AppError
 
 logger = logging.getLogger(__name__)
 
-_RETRYABLE_STATUS = frozenset({429, 500, 502, 503, 504})
+# Átmeneti állapotok: időtúllépés, rate limit, túlterhelt vagy épp nem elérhető szolgáltató.
+# A többi hiba (pl. 400, 401, 402, 404, 501) ismétléskor is ugyanaz maradna.
+_RETRYABLE_STATUS = frozenset({408, 425, 429, 500, 502, 503, 504})
 _FENCE = re.compile(r"^```(?:json)?\s*(.*?)\s*```$", re.DOTALL)
 
 
@@ -22,9 +27,12 @@ class LlmError(AppError):
     code = "llm_error"
     status_code = 502
 
-    def __init__(self, message: str, *, code: str | None = None, fields: tuple[str, ...] = ()) -> None:
+    def __init__(
+        self, message: str, *, code: str | None = None, fields: tuple[str, ...] = (), retryable: bool = False
+    ) -> None:
         super().__init__(message, code=code)
         self.fields = fields
+        self.retryable = retryable
 
 
 class LlmUnavailableError(LlmError):
@@ -57,6 +65,7 @@ class JsonChat(Protocol):
 
 def _error_for_status(status: int, detail: str) -> LlmError:
     message = f"LLM request failed ({status}): {detail}" if detail else f"LLM request failed ({status})"
+    retryable = status in _RETRYABLE_STATUS
     if status in (401, 403):
         return LlmAuthError(message)
     if status == 402:
@@ -64,10 +73,10 @@ def _error_for_status(status: int, detail: str) -> LlmError:
     if status == 404:
         return LlmModelError(message)
     if status == 429:
-        return LlmRateLimitedError(message)
-    if status >= 500:
-        return LlmUnavailableError(message)
-    return LlmError(message)
+        return LlmRateLimitedError(message, retryable=retryable)
+    if status == 408 or status >= 500:
+        return LlmUnavailableError(message, retryable=retryable)
+    return LlmError(message, retryable=retryable)
 
 
 def _error_detail(body: object) -> str:
@@ -87,7 +96,7 @@ class LlmClient:
         api_key: str,
         model: str,
         base_url: str,
-        timeout: float,
+        timeout: float = 20.0,
         concurrency: int = 4,
         max_retries: int = 2,
         retry_delay: float = 1.0,
@@ -117,8 +126,8 @@ class LlmClient:
         while True:
             try:
                 return await self._post(payload)
-            except (LlmUnavailableError, LlmRateLimitedError) as exc:
-                if attempt >= self._max_retries:
+            except LlmError as exc:
+                if not exc.retryable or attempt >= self._max_retries:
                     raise
                 delay = self._retry_delay * 2**attempt
                 attempt += 1
@@ -134,8 +143,11 @@ class LlmClient:
                 timeout=self._timeout,
             )
         except httpx.TimeoutException as exc:
-            raise LlmUnavailableError("LLM request timed out") from exc
+            raise LlmUnavailableError("LLM request timed out", retryable=True) from exc
+        except (httpx.NetworkError, httpx.RemoteProtocolError) as exc:
+            raise LlmUnavailableError(f"LLM request failed: {type(exc).__name__}", retryable=True) from exc
         except httpx.HTTPError as exc:
+            # Pl. nem támogatott protokoll a beállított URL-ben: ismétléssel sem javul.
             raise LlmUnavailableError(f"LLM request failed: {type(exc).__name__}") from exc
         try:
             body = response.json()

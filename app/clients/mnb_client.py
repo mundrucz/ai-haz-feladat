@@ -17,6 +17,9 @@ logger = logging.getLogger(__name__)
 
 _NAMESPACE = "http://www.mnb.hu/webservices/"
 _CURRENCY = re.compile(r"[A-Z]{3}")
+# Átmeneti állapotok: időtúllépés, rate limit, túlterhelt vagy épp nem elérhető szolgáltató.
+# A többi hiba (pl. 400, 404, 501) ismétléskor is ugyanaz maradna.
+_RETRYABLE_STATUS = frozenset({408, 425, 429, 500, 502, 503, 504})
 
 
 class MnbError(AppError):
@@ -115,12 +118,17 @@ class MnbClient:
             )
         except httpx.TimeoutException as exc:
             raise _Transient("MNB request timed out") from exc
-        except httpx.HTTPError as exc:
+        except (httpx.NetworkError, httpx.RemoteProtocolError) as exc:
             raise _Transient(f"MNB request failed: {type(exc).__name__}") from exc
+        except httpx.HTTPError as exc:
+            # Pl. nem támogatott protokoll a beállított URL-ben: ismétléssel sem javul.
+            raise MnbError(f"MNB request failed: {type(exc).__name__}") from exc
         if fault := _soap_fault(response.text):
             raise MnbRejectedError(f"MNB error: {fault}")
-        if response.status_code >= 500:
+        if response.status_code in _RETRYABLE_STATUS:
             raise _Transient(f"MNB request failed ({response.status_code})")
+        if response.status_code >= 500:
+            raise MnbError(f"MNB request failed ({response.status_code})")
         if response.status_code >= 400:
             raise MnbRejectedError(f"MNB request failed ({response.status_code})")
         return response.text
