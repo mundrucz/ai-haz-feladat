@@ -78,7 +78,7 @@ A fájlnév utótagja jelzi a réteget (`*_service.py`, `*_repository.py`, `*_cl
 | `pdf_service.py` | PDF-szöveg oldalanként (PyMuPDF); nem PDF, sérült, jelszavas és szöveg nélküli (szkennelt) fájl felismerése |
 | `InvoiceAnalyzer` (`invoice_service.py`) | LLM-kinyerés → kötelező mezők → validáció → irány és partner → devizaellenőrzés → mentés |
 | `RateService` (`rate_service.py`) | árfolyam-kiválasztás, hiányzó időszakok lekérése, single-flight, átváltás |
-| `ReportService` (`report_service.py`) | forintra váltás, havi bontás, partnerösszesítő, számlalista |
+| `ReportService` (`report_service.py`) | forintra váltás (egyszer, tárolva), havi bontás, partnerösszesítő, lapozott számlalista |
 | `FailedFileLog` (`failed_file_service.py`) | a hibás fájlok tartós naplója (JSON Lines) |
 
 ### Végpontok
@@ -90,8 +90,8 @@ A fájlnév utótagja jelzi a réteget (`*_service.py`, `*_repository.py`, `*_cl
 | `GET /api/documents` | folyamatban lévő és hibás fájlok |
 | `POST /api/documents/uploads/{id}/cancel` | egy feltöltési menet leállítása |
 | `DELETE /api/documents/failed` | a hibás fájlok listájának ürítése |
-| `GET /api/invoices`, `DELETE /api/invoices` | tárolt számlák listája, illetve mindegyik törlése |
-| `GET /api/report` | a teljes kimutatás (diagram, összesítő, számlalista) |
+| `GET /api/invoices?group=&offset=&limit=`, `DELETE /api/invoices` | a számlalista egy oldala (csoport: `all`, `storno`, `future`, `needs_review`; `limit` legfeljebb 200) a csoportok elemszámával, illetve az összes számla törlése |
+| `GET /api/report` | a kimutatás (diagram, összesítő, lefedettség, az összesítésből kimaradó számlák legfeljebb 500-ig) |
 | `GET /health` | állapot (Docker healthcheck) |
 
 ## A feldolgozás menete
@@ -103,9 +103,9 @@ A fájlnév utótagja jelzi a réteget (`*_service.py`, `*_repository.py`, `*_cl
 5. **Irány és partner.** Kimenő, ha a kiállító a saját cég; bejövő, ha a vevő. A partner a másik fél.
 6. **Devizaellenőrzés.** Jegyzi-e az MNB a számla devizáját (`GetCurrencies`).
 7. **Mentés.** A kinyert mezők, az irány, a partner, az állapot (`ok` vagy `needs_review`) és a figyelmeztetések kerülnek az adatbázisba.
-8. **Kimutatás.** A felület a `GET /api/report` végpontot kérdezi. Ilyenkor kerül sor az árfolyamok lekérésére (csak a hiányzókat), a forintra váltásra és az összesítésre.
+8. **Kimutatás.** A felület a `GET /api/report` és a `GET /api/invoices` végpontot kérdezi. Ilyenkor csak a még át nem váltott (új, újrafeltöltött vagy árfolyam nélkül maradt) számlákat váltjuk át egy kötegben: lekérjük a hiányzó árfolyamokat, és az eredményt (árfolyam, forintösszeg, kimaradás oka) a számla sorában tároljuk. Az összesítést az adatbázis számolja a tárolt összegekből (`GROUP BY`), a számlalista lapozva (oldalanként 50) érkezik.
 
-A felület feltöltés közben 1,5 másodpercenként lekérdezi a feldolgozási listát és a kimutatást, és újrarajzolja őket; ha nincs folyamatban lévő munka, a lekérdezés leáll. Az eredmény az adatbázisban van, így oldalfrissítés és újraindítás után is megmarad.
+A felület feltöltés közben 1,5 másodpercenként lekérdezi a feldolgozási listát, a kimutatást (diagram, összesítő, számlalista) pedig 4 másodpercenként rajzolja újra. Amíg a feltöltés vagy a feldolgozás tart, mindhárom szakasz fölött jelzés mutatja, hogy az adatok még nem véglegesek; a munka végén egy utolsó frissítés jön, és a jelzés eltűnik. Ha nincs folyamatban lévő munka, a lekérdezés leáll. Az eredmény az adatbázisban van, így oldalfrissítés és újraindítás után is megmarad.
 
 A **Leállítás** gomb után a már futó fájlok befejeződnek. A sorban állók és a még fel sem küldöttek nyom nélkül kimaradnak: nem kerülnek a hibás fájlok közé, csak a böngésző összegzése jelzi a számukat, és később újra feltölthetők.
 
@@ -160,18 +160,20 @@ Az LLM válaszát nem fogadjuk el vakon. A lépések sorrendben:
    - `no_direction`: a saját cég se kiállító, se vevő (vagy mindkettő);
    - `currency_not_quoted`: az MNB nem jegyzi a devizát.
 
+   A jövőbeli teljesítés nem gyanús: a számla nem lesz ellenőrzendő, de `future_performance` jelölést kap, és kimarad a kimutatásból (lásd „MNB-árfolyamok”).
+
 ## Irány, partner, duplikáció
 
 - **Saját cég felismerése:** a kinyert fél adószáma vagy neve (tagolás- és kisbetű-függetlenül) egyezik a beállított adószámmal, EU-adószámmal vagy névvel. Irány nélküli számla tárolódik, de kimarad az összesítésből: nem találgatunk, mert a rossz irányt nehezebb észrevenni, mint egy jelölt, kimaradt számlát.
 - **Partner:** az adószám azonosítja. A magyar formát egységesítjük (a `HU` előtag és a 11 jegyű adószám első 8 jegye egyezik); a megjelenített név a partner leggyakoribb neve.
 - **Duplikáció, két szinten, az adatbázis egyedi kulcsaival is kikényszerítve:**
-  - ugyanaz a fájl: a tartalom SHA-256 hash-e (`content_hash` UNIQUE). Az újrafeltöltés idempotens, nem hív újra LLM-et; a szerver már a feltöltéskor kiszűri, a folyamatban lévő fájlokkal szemben is;
+  - ugyanaz a fájl: a tartalom SHA-256 hash-e (`content_hash` UNIQUE). Az újrafeltöltés idempotens, nem hív újra LLM-et; a szerver már a feltöltéskor kiszűri, a folyamatban lévő fájlokkal szemben is. Egyetlen kivétel a jövőbeli teljesítés jelölése: azt az újrafeltöltés a tárolt adatokból újraértékeli;
   - ugyanaz a számla más fájlban: a kiállító normalizált adószáma és a számlaszám (`identity_key` UNIQUE), `duplicate_invoice` hibával. A mentés író zár alatt fut (`BEGIN IMMEDIATE`), az esetleges egyedikulcs-ütközést is duplikátumként kezeljük, így párhuzamos feltöltésnél sincs kettőzés.
 
 ## MNB-árfolyamok lekérése és tárolása
 
 - **Melyik árfolyam:** a teljesítés napjának MNB-árfolyama; ha aznap nem volt jegyzés (hétvége, ünnepnap), az utolsó megelőző jegyzés, legfeljebb `MNB_LOOKBACK_DAYS` (31) napra visszamenőleg. Az `unit` mezőt figyelembe vesszük (például 100 JPY).
-- **Jövőbeli teljesítés:** a mai nap legutóbbi jegyzését kapja (becsült árfolyam). A felület jelöli, hogy az összeg nem végleges; a teljesítés napja után a forintösszeg magától a valódi árfolyamra vált.
+- **Jövőbeli teljesítés:** még nincs hozzá árfolyam, ezért nem váltjuk át és nem becsüljük. A feldolgozáskor jövőbeli teljesítésű számla (a forintos is) `future_performance` jelölést kap: tárolódik, de kimarad a diagramból és az összesítőből; a számlalista „Jövőbeli teljesítésű számlák” csoportjában látszik (a Bruttó (HUF) oszlopban „–”), a „Hibás fájlok” listában nem. A jelölés a teljesítés napja után sem kerül le magától. Az azonos fájl újrafeltöltésekor LLM-hívás nélkül, a tárolt adatokból újraértékeljük: ha a teljesítés napja már elérkezett, a jelölés lekerül, és a számla bekerül a kimutatásba.
 - **Átváltás:** `bruttó × árfolyam / unit`, `Decimal`-lal, számlánként egész forintra kerekítve (`ROUND_HALF_UP`). Az összesítés csak ezután történik. A kimutatás pénznemében kiállított számlát nem váltjuk át.
 - **Kliens:** nyers SOAP `httpx`-szel és `xml.etree`-vel (`GetExchangeRates`, `GetCurrencies`). Nincs beégetett deviza és nincs beégetett céldeviza. A támogatott devizák körét az MNB `GetCurrencies` válasza adja.
 - **Tárolás (SQLite):**
@@ -193,11 +195,13 @@ Az LLM válaszát nem fogadjuk el vakon. A lépések sorrendben:
 
 Egy oldalon, ebben a sorrendben; minden összeg bruttó, a kimutatás pénznemében (alapértelmezés: HUF).
 
-1. **Havi cash-flow vonaldiagram** (Chart.js, a repóban vendorolva): a fizetési határidő hónapja szerint, bejövő és kimenő vonallal. Az üres hónapok 0 értéket kapnak; jelmagyarázattal, tengelyfeliratokkal és ezres tagolással.
+1. **Bruttó havi kimutatás, fizetési határidő szerint** (vonaldiagram, Chart.js, a repóban vendorolva): a fizetési határidő hónapja szerint, bejövő és kimenő vonallal; a pénznem az y tengely felirata. Az üres hónapok 0 értéket kapnak; jelmagyarázattal, tengelyfeliratokkal és ezres tagolással.
 2. **Cégenkénti összesítő:** oszlopban a partnerek, sorban az Össz bejövő és az Össz kimenő; a hiányzó irány értéke 0.
-3. **Számlalista:** az eredeti összeg és pénznem, a felhasznált MNB-árfolyam (egységgel) és annak dátuma, a forintösszeg, az irány, a partner és az állapot. Az ellenőrzendő vagy át nem váltható számla oka is látszik. A lista csoportonként szűrhető: összes kinyert, sztornó, jövőbeli teljesítésű, ellenőrzendő; a sztornó és a becsült árfolyamú számla címkét kap.
+3. **Számlalista:** az eredeti összeg és pénznem, a felhasznált MNB-árfolyam (egységgel) és annak dátuma, a forintösszeg, az irány, a partner és az állapot. Az ellenőrzendő vagy át nem váltható számla oka is látszik. A lista csoportonként szűrhető: összes kinyert, sztornó, jövőbeli teljesítésű, ellenőrzendő; a sztornó és a jövőbeli teljesítésű számla címkét kap. A szűrés és a lapozás (oldalanként 50 számla, Előző/Következő) a szerveren történik.
 
-**Mi kerül a diagramba és az összesítőbe:** a rendben lévő, irányos, átváltott számla, köztük a sztornó (negatív összeggel, csökkenti a partner összegét) és a jövőbeli teljesítésű (mai árfolyamon becsülve). Kimarad az ellenőrzendő (`needs_review`), az árfolyam nélküli és az irány nélküli számla. A diagram és az összesítő alatt ezt darabszámokkal kiírjuk, a becsült árfolyamú számlákra külön figyelmeztetéssel. Fölötte a feldolgozási lista mutatja a folyamatban lévő és a hibás fájlokat, fájlonként érthető okkal. A felület szövegei a `web/locales/hu.json`-ból jönnek; a szám- és dátumformátum a `DEFAULT_LOCALE`-hoz igazodik.
+**Tárolt átváltás:** a forintösszeg a számla sorában van, és csak akkor számoljuk újra, ha a számla megváltozik (újrafeltöltés, a jövőbeli jelölés levétele), ha nem volt hozzá árfolyam (például MNB-kiesés), vagy ha a kimutatás pénzneme megváltozik. A sor revíziószáma védi, hogy egy közben módosult számlára ne kerüljön régi átváltás.
+
+**Mi kerül a diagramba és az összesítőbe:** a rendben lévő, irányos, átváltott számla, köztük a sztornó (negatív összeggel, csökkenti a partner összegét). Kimarad az ellenőrzendő (`needs_review`), a jövőbeli teljesítésű (`future_performance`), az árfolyam nélküli és az irány nélküli számla. A diagram és az összesítő alatt a beszámított számlák darabszáma látszik; a kimaradókat a számlalista csoportjai és a „Hibás fájlok” lista mutatja. Fölötte a feldolgozási lista mutatja a folyamatban lévő és a hibás fájlokat, fájlonként érthető okkal. A felület szövegei a `web/locales/hu.json`-ból jönnek; a szám- és dátumformátum a `DEFAULT_LOCALE`-hoz igazodik.
 
 ## Hibakezelés és naplózás
 
@@ -259,6 +263,8 @@ Minden hiba kódot és a nyelvi fájlból (`web/locales/hu.json`) fordított üz
 | `mnb_rejected` | az MNB elutasította a lekérést |
 | `mnb_no_rate` | `MNB_LOOKBACK_DAYS` napon belül nincs jegyzés a devizára |
 
+**Jövőbeli teljesítés (`future_performance`).** A teljesítés dátuma a feldolgozáskor a jövőben volt, ezért nincs hozzá MNB-árfolyam. A számla tárolódik (nem ellenőrzendő), de kimarad a diagramból és az összesítőből. Nem hiba, ezért a „Hibás fájlok” listában nem szerepel: a számlalista „Jövőbeli teljesítésű számlák” csoportjában látszik, „Jövőbeli teljesítés” címkével. Magától nem kerül be: a teljesítés napjától az azonos fájlt újra kell tölteni. Ilyenkor nincs LLM-hívás, a jelölés a tárolt adatok alapján lekerül, és a feltöltés összegzése „újraértékelve” darabszámot mutat (API-ban `outcome: "updated"`).
+
 **API- és indítási hibák.** Az API válasza `{"error": {"code": …, "message": …}}`.
 
 | Kód | HTTP | Jelentés |
@@ -271,7 +277,7 @@ Minden hiba kódot és a nyelvi fájlból (`web/locales/hu.json`) fordított üz
 
 ## Adatbázis és migrációk
 
-SQLite a volume-on (`/app/data/app.db`). Táblák: `invoices`, `exchange_rates`, `rate_coverage`, `mnb_currencies` (`app/db/tables.py`). A pénzösszegek szövegként tárolt `Decimal`-ok, így nincs lebegőpontos kerekítés. A sémát Alembic-revíziók követik (`app/db/migrations/versions/`). Induláskor az alkalmazás egy tranzakcióban a legfrissebb revízióra hozza az adatbázist: ha egy lépés elbukik, semmi sem marad félkészen.
+SQLite a volume-on (`/app/data/app.db`). Táblák: `invoices` (a kinyert mezők mellett a tárolt átváltás: `report_currency`, `rate`, `rate_unit`, `rate_date`, `report_amount`, `report_problem`, `report_exclusion`, valamint a `revision`), `exchange_rates`, `rate_coverage`, `mnb_currencies` (`app/db/tables.py`). A pénzösszegek szövegként tárolt `Decimal`-ok, így nincs lebegőpontos kerekítés. A sémát Alembic-revíziók követik (`app/db/migrations/versions/`). Induláskor az alkalmazás egy tranzakcióban a legfrissebb revízióra hozza az adatbázist: ha egy lépés elbukik, semmi sem marad félkészen.
 
 Sémaváltoztatás: a `tables.py` módosítása után Dockerben generáljuk a revíziót, és átnézzük:
 
@@ -289,7 +295,7 @@ pytest. Hálózatot nem használnak: az MNB és az OpenRouter `httpx.MockTranspo
 |---|---|
 | adatkinyerés | `extraction/test_normalize.py`, `test_validation.py`, `test_line_items.py`; `services/test_invoice_service.py` (kötelező mezők, irány, partner, duplikáció); `services/test_pdf_service.py`; `clients/test_llm_client.py` (kliens, hibakódok, e2e feltöltés mockolt LLM-mel) |
 | árfolyam-kiválasztás | `services/test_rate_service.py` (megelőző nap, lookback, `unit`, hiányzó időszakok, single-flight, kiesés), `clients/test_mnb_client.py` |
-| aggregálás | `services/test_report_service.py` (havi bontás, üres hónapok, partnerösszesítő, kerekítés, sztornó, jövőbeli becsült árfolyam, ellenőrzendő kihagyása, csoportok) |
+| aggregálás | `services/test_report_service.py` (havi bontás, üres hónapok, partnerösszesítő, kerekítés, sztornó, jövőbeli teljesítés kihagyása, ellenőrzendő kihagyása, csoportok, tárolt átváltás és újraátváltás, lapozás) |
 | egyéb | feltöltés, sor, API, konfiguráció, i18n, migráció |
 
 Futtatás Dockerben (a kép a fejlesztői függőségek nélkül készül, ezért ezeket a konténerben telepítjük):
@@ -307,14 +313,14 @@ docker run --rm -u root -v "${PWD}\tests:/app/tests:ro" -v "${PWD}\pytest.ini:/a
 - **Partnerazonosítás:** csak a magyar adószám-formákat egységesítjük. Külföldi partnernél, ha az egyik számlán EU-adószám, a másikon nemzeti adószám szerepel, ugyanaz a cég két oszlopba kerülhet.
 - **Irány nélküli számla:** ha a saját cég szokatlan alakban szerepel (más adószámforma, eltérő jogi forma), a számla `no_direction` jelölést kap, és kimarad az összesítésből; a hiány csak a számlalistában látszik.
 - **Előlegszámla:** az előre fizetett előlegszámla (`due_before_issue`) ellenőrzendő jelölést kap, és kimarad a kimutatásból. A validáció nem ismeri a számlatípusokat; a sztornót csak a negatív végösszeg jelzi.
-- **Jövőbeli teljesítés:** a devizás számla a mai árfolyamon, becsülve kerül a kimutatásba, így a forintösszeg a teljesítés napjáig változhat. MNB-kiesés alatt a jövőbeli devizás számla `mnb_unavailable` jelölést kap, mert a mai árfolyamot nem tekintjük véglegesen tároltnak.
-- **MNB-kiesés:** a nem tárolt árfolyamú devizás számlák kimaradnak az összesítésből; a diagram és az összesítő alatt a darabszámuk látszik, az ok a számlalistában.
+- **Jövőbeli teljesítés:** a feldolgozáskor jövőbeli teljesítésű számla kimarad a kimutatásból, és a teljesítés napja után sem kerül be magától: a fájlt újra fel kell tölteni (ez már nem hív LLM-et). Ha a fájl nincs meg, csak az összes számla törlése és újrafeltöltés segít.
+- **MNB-kiesés:** a nem tárolt árfolyamú devizás számlák kimaradnak az összesítésből; a „Hibás fájlok” listában és a számlalistában látszanak az okukkal.
 - **Rögzített kimutatás-tartalom:** nem állítható, mely csoportok (sztornó, jövőbeli, ellenőrzendő) kerüljenek a diagramba és az összesítőbe.
 - **Tételsor-ellenőrzés:** csak felismerhető mennyiség × egységár = sorösszeg szerkezetnél fut, legalább 2 sorral.
 - **A kinyert adat nem javítható:** nincs szerkesztés és jóváhagyás, csak az összes számla törlése és újrafeltöltés. A PDF-et szándékosan nem tároljuk, ezért újrakinyeréshez újra fel kell tölteni.
 - **Memóriabeli állapot, egy worker:** a folyamatban lévő és a hibás fájlok listája újraindításkor elvész (a hibanapló megmarad), és minden felhasználónak közös. Új feltöltés indulásakor a lista kiürül, egy párhuzamos menet hibáival együtt. Emiatt az alkalmazás szándékosan egy uvicorn-folyamattal fut.
 - **Nincs hitelesítés:** bárki, aki eléri az oldalt, törölheti az összes számlát.
-- **Skálázás:** a számlalista lapozás nélkül töltődik be, a kimutatás minden lekérdezéskor újraszámolódik.
+- **Skálázás:** egy SQLite-adatbázis és egy worker; a „Hibás fájlok” listája legfeljebb 500 kimaradó számlát mutat (a darabszám a teljes).
 - **A felület csak magyar,** de a szövegek nyelvi fájlban vannak.
 
 ## Továbbfejlesztési ötletek
@@ -325,6 +331,6 @@ docker run --rm -u root -v "${PWD}\tests:/app/tests:ro" -v "${PWD}\pytest.ini:/a
 - Állítható kimutatás-tartalom: a felületen ki-be kapcsolható, mely csoportok (sztornó, jövőbeli teljesítésű, ellenőrzendő) kerüljenek a diagramba és az összesítőbe; esetleg csoportonként külön kimutatás (például csak a jövőbeli számlák várható cash-flow-ja, vagy az ellenőrzendők összege).
 - Rugalmasabb partner- és saját cég-egyezés: ország-előtag nélküli számjegymag, jogi forma nélküli név, a fél összes azonosítójának tárolása, kézi összevonás.
 - A feldolgozási állapot az adatbázisba kerüljön (tartós, több worker, menetenkénti hibalista).
-- Export (CSV vagy Excel, a diagram képként), nyomtatóbarát nézet, lapozás, szűrés, rendezés.
+- Export (CSV vagy Excel, a diagram képként), nyomtatóbarát nézet, keresés, rendezés.
 - LLM-keret (napi hívásszám-korlát), egyszerű hitelesítés, a hibanapló letöltése a felületről, további felületi nyelvek.
 - Statikus kódelemzés (például SonarCloud) és lefedettségmérés CI-ban.
