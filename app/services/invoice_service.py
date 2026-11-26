@@ -1,5 +1,7 @@
 """Számlaelemzés: osztályozás (irány, partner) és a feldolgozási láncba kötött elemző."""
 
+from collections.abc import Callable
+from datetime import date
 from typing import Protocol
 
 from app.core.errors import ProcessingError
@@ -39,6 +41,8 @@ class InvoiceAnalyzer:
 
     Ha van `currency_check`, a mentés előtt kiderül, hogy az MNB jegyzi-e a számla devizáját (a kimutatás
     pénzneme kivételével); ha nem, a számla ellenőrzendő.
+
+    A jövőbeli teljesítésű számla `future_performance` jelöléssel tárolódik (a `today` órához mérve).
     """
 
     def __init__(
@@ -48,12 +52,15 @@ class InvoiceAnalyzer:
         company: Company,
         currency_check: CurrencyCheck | None = None,
         report_currency: str | None = None,
+        *,
+        today: Callable[[], date] = date.today,
     ) -> None:
         self._llm = llm
         self._repository = repository
         self._company = company
         self._currency_check = currency_check
         self._report_currency = report_currency
+        self._today = today
 
     async def analyze(self, content_hash: str, filename: str, text: str) -> None:
         fields = await self._llm.extract(text)
@@ -80,7 +87,7 @@ class InvoiceAnalyzer:
                 code="incomplete_data",
                 fields=missing_required,
             )
-        validation = validate_invoice(fields, company=self._company, source_text=text)
+        validation = validate_invoice(fields, company=self._company, source_text=text, today=self._today())
         if validation.status is InvoiceStatus.INVALID:
             invalid = tuple(issue.field or issue.code for issue in validation.issues if issue.severity is Severity.ERROR)
             raise ProcessingError(f"invalid invoice data: {', '.join(invalid)}", code="invalid_data", fields=invalid)

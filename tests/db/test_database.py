@@ -1,4 +1,5 @@
 import json
+from datetime import date, timedelta
 
 import pytest
 from alembic import command
@@ -69,6 +70,31 @@ async def test_stored_storno_is_no_longer_flagged_after_migration(tmp_path):
         "both": ("needs_review", ["same_party"]),
         "zero": ("needs_review", ["zero_total"]),
     }
+
+
+async def test_stored_future_performance_invoice_is_flagged_after_migration(tmp_path):
+    db = Database(tmp_path / "app.db")
+    future = (date.today() + timedelta(days=30)).isoformat()
+    rows = {"past": "2026-01-01", "future": future}
+    async with db.engine.begin() as conn:
+        await conn.run_sync(lambda c: _upgrade(c, "0002"))
+        for number, performance in rows.items():
+            await conn.execute(
+                text(
+                    "INSERT INTO invoices (content_hash, filename, invoice_number, seller_name, seller_tax_id,"
+                    " buyer_name, buyer_tax_id, issue_date, performance_date, due_date, currency, gross_total,"
+                    " status, issues) VALUES (:n, :n, :n, 'A', '1', 'B', '2', '2026-01-01', :performance,"
+                    " :performance, 'EUR', '100', 'ok', '[]')"
+                ),
+                {"n": number, "performance": performance},
+            )
+
+    await db.init()
+
+    async with db.session() as session:
+        result = await session.execute(text("SELECT invoice_number, status, issues FROM invoices"))
+        migrated = {number: (status, [i["code"] for i in json.loads(issues)]) for number, status, issues in result}
+    assert migrated == {"past": ("ok", []), "future": ("ok", ["future_performance"])}
 
 
 async def test_failed_migration_leaves_no_partial_schema(tmp_path, monkeypatch):
