@@ -253,3 +253,9 @@ A fejlesztő kérései, egyenként megvalósítva:
   - tesztek: sztornó-, nulla- és jövőbeli esetek, a migráció a régi jelölésű sorokon; kipróbálva Dockerben szintetikus számlákkal.
 - **AI tévedése:** a korábbi `test_future_dates_are_not_requested` a régi szabályt rögzítette, és a célzott futtatáskor bukott el. Átírva az új szabályra (csak a mai napig kérünk).
 - **AI tévedése:** a felület kipróbálásához beszúrt próbaszámla jelöléseit egyszerű szövegként írta az adatbázisba (`{code, field}` objektum helyett), így a lista üres maradt. A headless böngészős képernyőkép hozta ki; az adatot javította, az alkalmazás kódja jó volt.
+
+### Időkorlátok
+- **Kérés:** „20, 60 second, ezek nagyon magas timeoutok.”
+- **AI javaslata:** különálló kapcsolódási és olvasási időkorlát; kapcsolódás 5 mp, LLM-olvasás 30 mp, MNB-olvasás 10 mp. Figyelmeztetett, hogy túl alacsony értéknél a lassú, de jó LLM-válasz is időtúllépést kap, és az újrapróbálás újabb fizetős hívás.
+- **Döntés (felhasználó):** kapcsolódás 5 mp, LLM 15 mp, MNB 5 mp.
+- **Eredmény:** új `HTTP_CONNECT_TIMEOUT_SECONDS` (5) beállítás, `LLM_TIMEOUT_SECONDS` 60 → 15, `MNB_TIMEOUT_SECONDS` 20 → 5. A kliensek `httpx.Timeout(olvasás, connect=kapcsolódás)` objektumot küldenek; tesztek ellenőrzik a kérésben átadott értékeket. A helyi `.env` 60 mp-es értékét is átírtuk, mert az felülírta volna az új alapértéket.

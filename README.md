@@ -26,9 +26,10 @@ Minden beállítás környezeti változóból (`.env`) jön; az alapértékeket 
 | `OPENROUTER_API_KEY` | **kötelező** | LLM-kulcs; üresen az alkalmazás nem indul el |
 | `OPENROUTER_MODEL` | `openai/gpt-4o-mini` | az LLM-modell neve |
 | `OPENROUTER_BASE_URL` | `https://openrouter.ai/api/v1` | OpenAI-kompatibilis végpont |
-| `LLM_TIMEOUT_SECONDS`, `LLM_CONCURRENCY` | `60`, `4` | LLM-időkorlát, párhuzamos hívások száma |
+| `LLM_TIMEOUT_SECONDS`, `LLM_CONCURRENCY` | `15`, `4` | LLM olvasási időkorlát (mp), párhuzamos hívások száma |
 | `COMPANY_NAME`, `COMPANY_TAX_NUMBER`, `COMPANY_EU_VAT` | **kötelező** | a saját cég; ez alapján dől el az irány |
-| `MNB_URL`, `MNB_TIMEOUT_SECONDS`, `MNB_CONCURRENCY` | `http://www.mnb.hu/arfolyamok.asmx`, `20`, `2` | MNB SOAP-végpont (csak `http`-n működik) |
+| `MNB_URL`, `MNB_TIMEOUT_SECONDS`, `MNB_CONCURRENCY` | `http://www.mnb.hu/arfolyamok.asmx`, `5`, `2` | MNB SOAP-végpont (csak `http`-n működik), olvasási időkorlát (mp), párhuzamos hívások |
+| `HTTP_CONNECT_TIMEOUT_SECONDS` | `5` | kapcsolódási időkorlát (mp) az LLM- és az MNB-hívásokra |
 | `MNB_LOOKBACK_DAYS` | `31` | legfeljebb ennyi nappal korábbi jegyzést fogadunk el |
 | `MNB_CURRENCIES_TTL_DAYS` | `7` | ennyi napig használjuk a tárolt MNB-devizalistát |
 | `REPORT_CURRENCY` | `HUF` | a kimutatás pénzneme |

@@ -116,6 +116,18 @@ async def test_persistent_failure_raises_after_retries():
     assert len(attempts) == 3
 
 
+async def test_sends_separate_connect_and_read_timeouts():
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.update(request.extensions["timeout"])
+        return httpx.Response(200, text=soap_response({}))
+
+    await client_for(handler, timeout=5, connect_timeout=3).fetch_rates(["EUR"], date(2026, 1, 1), date(2026, 1, 2))
+
+    assert (seen["connect"], seen["read"]) == (3, 5)
+
+
 @pytest.mark.parametrize("status", [408, 429, 502, 503, 504])
 async def test_transient_status_is_retried(status):
     attempts = []

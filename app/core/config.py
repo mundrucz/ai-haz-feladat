@@ -83,7 +83,10 @@ class Settings(BaseSettings):
     openrouter_api_key: ApiKey
     openrouter_model: Text = "openai/gpt-4o-mini"
     openrouter_base_url: HttpUrl = "https://openrouter.ai/api/v1"
-    llm_timeout_seconds: PositiveFloat = 60.0
+    # Kapcsolódási időkorlát minden külső HTTP-hívásra (LLM, MNB)
+    http_connect_timeout_seconds: PositiveFloat = 5.0
+    # Olvasási időkorlát: legfeljebb ennyit várunk két válaszrészlet között
+    llm_timeout_seconds: PositiveFloat = 15.0
     llm_concurrency: PositiveInt = 4
 
     company_name: Text
@@ -91,7 +94,7 @@ class Settings(BaseSettings):
     company_eu_vat: EuVatNumber
 
     mnb_url: HttpUrl = "http://www.mnb.hu/arfolyamok.asmx"
-    mnb_timeout_seconds: PositiveFloat = 20.0
+    mnb_timeout_seconds: PositiveFloat = 5.0
     mnb_concurrency: PositiveInt = 2
     # Ennyi nappal korábbi jegyzésig keresünk árfolyamot (hétvége, ünnepnap miatt); 0: csak a pontos nap
     mnb_lookback_days: NonNegativeInt = 31

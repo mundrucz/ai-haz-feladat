@@ -76,6 +76,7 @@ def create_app(settings: Settings | None = None, http_client: httpx.AsyncClient 
             model=settings.openrouter_model,
             base_url=settings.openrouter_base_url,
             timeout=settings.llm_timeout_seconds,
+            connect_timeout=settings.http_connect_timeout_seconds,
             concurrency=settings.llm_concurrency,
         )
     )
@@ -84,6 +85,7 @@ def create_app(settings: Settings | None = None, http_client: httpx.AsyncClient 
         http_client,
         url=settings.mnb_url,
         timeout=settings.mnb_timeout_seconds,
+        connect_timeout=settings.http_connect_timeout_seconds,
         concurrency=settings.mnb_concurrency,
     )
     rate_service = RateService(

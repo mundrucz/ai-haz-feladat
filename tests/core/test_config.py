@@ -80,7 +80,8 @@ def test_eu_vat_may_contain_separators(required_env, monkeypatch):
 @pytest.mark.parametrize(
     "name, value, field, default",
     [
-        ("LLM_TIMEOUT_SECONDS", "abc", "llm_timeout_seconds", 60.0),
+        ("LLM_TIMEOUT_SECONDS", "abc", "llm_timeout_seconds", 15.0),
+        ("HTTP_CONNECT_TIMEOUT_SECONDS", "0", "http_connect_timeout_seconds", 5.0),
         ("LLM_CONCURRENCY", "0", "llm_concurrency", 4),
         ("PROCESSING_CONCURRENCY", "-2", "processing_concurrency", 4),
         ("PROCESSING_QUEUE_SIZE", "0", "processing_queue_size", 8),
@@ -107,7 +108,7 @@ def test_several_invalid_settings_fall_back_together(required_env, monkeypatch):
 
     settings, fallbacks = load_settings()
 
-    assert (settings.llm_concurrency, settings.mnb_timeout_seconds) == (4, 20.0)
+    assert (settings.llm_concurrency, settings.mnb_timeout_seconds) == (4, 5.0)
     assert {f.variable for f in fallbacks} == {"LLM_CONCURRENCY", "MNB_TIMEOUT_SECONDS"}
 
 

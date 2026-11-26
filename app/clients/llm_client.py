@@ -96,7 +96,8 @@ class LlmClient:
         api_key: str,
         model: str,
         base_url: str,
-        timeout: float = 20.0,
+        timeout: float = 15.0,
+        connect_timeout: float = 5.0,
         concurrency: int = 4,
         max_retries: int = 2,
         retry_delay: float = 1.0,
@@ -105,7 +106,7 @@ class LlmClient:
         self._api_key = api_key
         self._model = model
         self._url = f"{base_url.rstrip('/')}/chat/completions"
-        self._timeout = timeout
+        self._timeout = httpx.Timeout(timeout, connect=connect_timeout)
         self._slots = asyncio.Semaphore(max(1, concurrency))
         self._max_retries = max_retries
         self._retry_delay = retry_delay
