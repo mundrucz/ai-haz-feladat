@@ -114,6 +114,6 @@ Számlafeldolgozó webalkalmazás: PDF számlák feltöltése, adatkinyerés, MN
 
 ## Dokumentáció
 
-- A `README.md` tartalma: indítás és URL, architektúra, adatkinyerés és ismeretlen formátumok kezelése, MNB lekérés és tárolás, LLM-modell és indoklás, az LLM-válasz ellenőrzése, korlátok és továbbfejlesztés.
+- A `README.md` tartalma: indítás és URL, konfiguráció, architektúra és service-ek, a feldolgozás menete, adatkinyerés és ismeretlen formátumok kezelése, LLM-modell és indoklás, az LLM-válasz ellenőrzése, irány/partner/duplikáció, MNB lekérés és tárolás, kimutatás, hibakezelés és naplózás, adatbázis és migrációk, tesztek, ismert korlátok, továbbfejlesztés.
 - Ha egy változtatás a viselkedést érinti, a kapcsolódó dokumentációt is frissítjük.
 
