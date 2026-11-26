@@ -4,14 +4,16 @@ from decimal import Decimal
 import pytest
 
 from app.extraction.company import Company
+from app.extraction.lexicon import Currency, Language
 from app.extraction.normalize import (
+    build_currency_marks,
+    build_month_table,
     currency_candidates,
     find_amounts,
-    infer_date_order,
     infer_decimal_separator,
+    is_currency_code,
     normalize_currency,
     normalize_key,
-    normalize_with_map,
     parse_amount,
     parse_date,
 )
@@ -107,9 +109,10 @@ def test_infer_decimal_separator(raws, expected):
         ("15th of March 2026", date(2026, 3, 15)),
         ("1 Sep 2026", date(2026, 9, 1)),
         ("3 września 2026", date(2026, 9, 3)),
-        ("15 března 2026", date(2026, 3, 15)),
         ("1 setiembre 2026", date(2026, 9, 1)),
-        ("29 februari 2028", date(2028, 2, 29)),
+        ("1 Jänner 2026", date(2026, 1, 1)),
+        ("Mar 15, 2026 (net 45 days)", date(2026, 3, 15)),
+        ("2026.03.15. (paid)", date(2026, 3, 15)),
     ],
 )
 def test_parse_date(raw, expected):
@@ -118,10 +121,20 @@ def test_parse_date(raw, expected):
 
 @pytest.mark.parametrize(
     "raw",
-    [None, "", "nincs", "03/04/2026", "31.02.2026", "15.03.26", "2026-13-01", "15 2026", "March April 2026", "2026-03"],
+    [None, "", "nincs", "03/04/2026", "31.02.2026", "15.03.26", "2026-13-01", "15 2026", "March April 2026", "2026-03",
+     "15 března 2026", "29 februari 2028"],
 )
-def test_parse_date_rejects_ambiguous_or_invalid(raw):
+def test_parse_date_rejects_ambiguous_invalid_or_unlisted_language(raw):
     assert parse_date(raw) is None
+
+
+def test_month_table_grows_with_a_new_language_file():
+    dutch = Language("nl", {}, tuple((name,) for name in (
+        "januari", "februari", "maart", "april", "mei", "juni", "juli", "augustus", "september", "oktober", "november", "december"
+    )))
+    table = build_month_table([dutch])
+    assert table["maart"] == 3
+    assert table["okt"] == 10
 
 
 def test_date_order_hint_resolves_ambiguity():
@@ -129,28 +142,22 @@ def test_date_order_hint_resolves_ambiguity():
     assert parse_date("03/04/2026", order="MDY") == date(2026, 3, 4)
 
 
-def test_infer_date_order():
-    assert infer_date_order(["15/03/2026", "03/04/2026"]) == "DMY"
-    assert infer_date_order(["03/15/2026"]) == "MDY"
-    assert infer_date_order(["03/04/2026"]) is None
-    assert infer_date_order(["15/03/2026", "03/15/2026"]) is None
-
-
 @pytest.mark.parametrize(
     ("raw", "expected"),
     [
         ("HUF", "HUF"),
-        ("JPY", "JPY"),
-        ("CHF", "CHF"),
-        ("SEK", "SEK"),
-        ("CZK", "CZK"),
-        ("RON", "RON"),
+        ("EUR", "EUR"),
+        ("USD", "USD"),
+        ("GBP", "GBP"),
+        ("PLN", "PLN"),
         ("€", "EUR"),
+        ("$", "USD"),
+        ("US$", "USD"),
+        ("£", "GBP"),
         ("Ft", "HUF"),
         ("Ft.", "HUF"),
         ("zł", "PLN"),
-        ("円", "JPY"),
-        ("₹", "INR"),
+        ("złoty", "PLN"),
         ("euro", "EUR"),
         (" EUR ", "EUR"),
     ],
@@ -159,15 +166,22 @@ def test_normalize_currency(raw, expected):
     assert normalize_currency(raw) == expected
 
 
-@pytest.mark.parametrize("raw", [None, "", "VAT", "NET", "TAX", "all", "try", "$", "kr", "¥", "xyz"])
-def test_normalize_currency_unknown_or_ambiguous(raw):
+@pytest.mark.parametrize("raw", [None, "", "VAT", "NET", "TAX", "all", "try", "xyz", "JPY", "CHF", "SEK", "円", "₹", "kr"])
+def test_normalize_currency_unknown_or_unlisted(raw):
     assert normalize_currency(raw) is None
 
 
-def test_ambiguous_symbols_list_candidates():
-    assert set(currency_candidates("$")) >= {"USD", "CAD", "AUD"}
-    assert set(currency_candidates("kr")) >= {"SEK", "NOK", "DKK"}
+def test_currency_marks_grow_with_new_entries_and_shared_symbols_become_ambiguous():
+    marks = build_currency_marks([Currency("USD", ("$",), ()), Currency("CAD", ("$", "C$"), ()), Currency("CHF", ("Fr.",), ("franken",))])
+    assert marks["$"] == ("USD", "CAD")
+    assert marks["c$"] == ("CAD",)
+    assert marks["franken"] == ("CHF",)
     assert currency_candidates("VAT") == ()
+
+
+@pytest.mark.parametrize(("code", "expected"), [("EUR", True), ("JPY", True), ("XYZ", True), ("EURO", False), ("eur", False), ("", False), (None, False)])
+def test_is_currency_code_checks_the_iso_format_only(code, expected):
+    assert is_currency_code(code) is expected
 
 
 def test_normalize_key():
@@ -210,11 +224,4 @@ def test_find_amounts_positions_and_negatives():
 
 def test_find_amounts_on_a_bare_amount_line():
     assert [match.value for match in find_amounts("16 222,00")] == [Decimal("16222.00")]
-
-
-def test_normalize_with_map_tracks_original_positions():
-    norm, origin = normalize_with_map("Számla száma: É")
-    assert norm == "szamla szama: e"
-    assert len(origin) == len(norm)
-    assert "Számla száma: É"[origin[-1]] == "É"
 

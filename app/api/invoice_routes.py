@@ -4,12 +4,13 @@ from fastapi import APIRouter, Depends
 
 from app.api.dependencies import get_invoice_repository, get_jobs
 from app.core.errors import ConflictError
+from app.extraction.validation import InvoiceStatus
 from app.repositories.invoice_repository import InvoiceRecord, InvoiceRepository
 from app.services.job_service import JobTracker
 
 router = APIRouter(prefix="/api/invoices")
 
-_STATUSES = ("ok", "needs_review")
+_STATUSES = (InvoiceStatus.OK.value, InvoiceStatus.NEEDS_REVIEW.value)
 
 
 def _invoice_view(record: InvoiceRecord) -> dict:
@@ -32,7 +33,6 @@ def _invoice_view(record: InvoiceRecord) -> dict:
         "partner": {"name": record.partner_name, "tax_id": record.partner_tax_id},
         "status": record.status,
         "issues": list(record.issues),
-        "source": record.source,
     }
 
 

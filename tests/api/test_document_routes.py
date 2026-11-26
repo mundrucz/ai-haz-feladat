@@ -1,11 +1,16 @@
 import asyncio
 import json
 import logging
+from datetime import date
+from decimal import Decimal
 
 import pytest
-from pdfs import invoice_text, make_blank_pdf, make_encrypted_pdf, make_pdf
+from pdfs import make_blank_pdf, make_encrypted_pdf, make_pdf
 
+from app.extraction.models import InvoiceFields
+from app.repositories.invoice_repository import Classification, Direction
 from app.services.job_service import MAX_FAILED_FILES, AddOutcome, JobTracker
+from app.services.upload_service import hash_bytes
 
 
 def upload(client, *files):
@@ -19,6 +24,26 @@ def wait_until_processed(client, app, timeout=10.0):
     portal.call(asyncio.wait_for, app.state.processor.join(), timeout)
 
 
+def store_invoice(client, app, data: bytes, filename: str = "a.pdf") -> None:
+    """Számla tárolása közvetlenül az adatbázisba, a `data` tartalom hash-ével (a tesztek nem hívnak LLM-et)."""
+    fields = InvoiceFields(
+        invoice_number=filename,
+        seller_name="Nordwind Solutions Kft.",
+        seller_tax_id="26481937-2-43",
+        buyer_name="Partner Kft.",
+        buyer_tax_id="12345678-2-42",
+        issue_date=date(2026, 1, 12),
+        performance_date=date(2026, 1, 11),
+        due_date=date(2026, 2, 11),
+        currency="HUF",
+        net_total=None,
+        vat_total=None,
+        gross_total=Decimal("1270.00"),
+    )
+    partner = Classification(Direction.OUTGOING, "Partner Kft.", "12345678-2-42")
+    client.portal.call(app.state.invoice_repository.save, hash_bytes(data), filename, fields, partner, "ok", [])
+
+
 def documents(client):
     return client.get("/api/documents").json()
 
@@ -27,8 +52,8 @@ def invoices(client):
     return client.get("/api/invoices").json()["invoices"]
 
 
-def test_successful_upload_stores_only_the_invoice_data(client, app, settings):
-    response = upload(client, ("szamla.pdf", make_pdf(invoice_text())))
+def test_upload_without_llm_key_fails_with_clear_reason_and_stores_no_pdf(client, app, settings):
+    response = upload(client, ("szamla.pdf", make_pdf("Számla")))
 
     assert response.status_code == 200
     result = response.json()["results"][0]
@@ -36,43 +61,39 @@ def test_successful_upload_stores_only_the_invoice_data(client, app, settings):
     assert result["error"] is None
 
     wait_until_processed(client, app)
-    assert documents(client) == {"documents": [], "counts": {"pending": 0, "processing": 0, "failed": 0}}
-    (invoice,) = invoices(client)
-    assert invoice["filename"] == "szamla.pdf"
+    (job,) = documents(client)["documents"]
+    assert (job["filename"], job["status"], job["error"]["code"]) == ("szamla.pdf", "failed", "llm_not_configured")
+    assert invoices(client) == []
     assert not list(settings.database_path.parent.glob("**/*.pdf"))
 
 
-def test_same_content_is_not_processed_twice_even_with_other_name(client, app):
-    data = make_pdf(invoice_text("ugyanaz-1"))
-    upload(client, ("a.pdf", data))
-    wait_until_processed(client, app)
+def test_same_content_as_a_stored_invoice_is_not_processed_again_even_with_other_name(client, app):
+    data = make_pdf("ugyanaz")
+    store_invoice(client, app, data, "a.pdf")
 
     second = upload(client, ("masik-nev.pdf", data)).json()["results"][0]
 
     assert second["outcome"] == "duplicate"
-    wait_until_processed(client, app)
     assert len(invoices(client)) == 1
 
 
-def test_duplicates_within_one_batch_create_one_invoice(client, app):
-    data = make_pdf(invoice_text())
+def test_duplicates_within_one_batch_are_processed_once(client, app):
+    data = make_pdf("x")
 
     results = upload(client, *[(f"{i}.pdf", data) for i in range(5)]).json()["results"]
 
     outcomes = sorted(r["outcome"] for r in results)
     assert outcomes == ["accepted"] + ["duplicate"] * 4
     wait_until_processed(client, app)
-    assert len(invoices(client)) == 1
 
 
 def test_bad_files_are_reported_as_errors_and_nothing_is_stored(client, app):
     files = [
-        ("jo.pdf", make_pdf(invoice_text())),
         ("nem-pdf.pdf", b"nem pdf tartalom"),
         ("jelszavas.pdf", make_encrypted_pdf()),
         ("ures-oldal.pdf", make_blank_pdf()),
         ("serult.pdf", make_pdf("x")[:200]),
-        ("level.pdf", make_pdf("Ez csak egy levél, nincs benne semmi.")),
+        ("szoveges.pdf", make_pdf("Ez csak egy levél.")),
     ]
 
     results = upload(client, *files).json()["results"]
@@ -80,26 +101,12 @@ def test_bad_files_are_reported_as_errors_and_nothing_is_stored(client, app):
     wait_until_processed(client, app)
 
     by_name = {d["filename"]: d for d in documents(client)["documents"]}
-    assert "jo.pdf" not in by_name
     assert by_name["nem-pdf.pdf"]["error"]["code"] == "not_a_pdf"
     assert by_name["jelszavas.pdf"]["error"]["code"] == "password_protected"
     assert by_name["ures-oldal.pdf"]["error"]["code"] == "no_text"
     assert by_name["serult.pdf"]["status"] == "failed"
-    assert by_name["level.pdf"]["error"]["code"] == "no_invoice_found"
+    assert by_name["szoveges.pdf"]["error"]["code"] == "llm_not_configured"
     assert by_name["nem-pdf.pdf"]["error"]["message"]
-    assert [i["filename"] for i in invoices(client)] == ["jo.pdf"]
-
-
-def test_invoice_with_missing_field_is_an_error_and_is_not_stored(client, app):
-    text = invoice_text().replace("Fizetési határidő: 2026.02.11.\n", "")
-
-    upload(client, ("hianyos.pdf", make_pdf(text)))
-    wait_until_processed(client, app)
-
-    (job,) = documents(client)["documents"]
-    assert job["status"] == "failed"
-    assert job["error"]["code"] == "incomplete_data"
-    assert job["error"]["fields"] == ["due_date"]
     assert invoices(client) == []
 
 
@@ -137,9 +144,8 @@ def test_too_large_file_is_rejected(client, app):
 
 
 def test_duplicate_upload_is_listed_with_duplicate_reason(client, app):
-    data = make_pdf(invoice_text("dup-lista-1"))
-    upload(client, ("a.pdf", data))
-    wait_until_processed(client, app)
+    data = make_pdf("dup-lista")
+    store_invoice(client, app, data, "a.pdf")
 
     upload(client, ("masolat.pdf", data))
 
@@ -225,8 +231,9 @@ def test_clear_failed_endpoint_empties_the_failed_list_only(client, app):
 
 
 def test_delete_invoices_removes_invoices_and_failed_files_and_allows_reupload(client, app):
-    data = make_pdf(invoice_text("torles-1"))
-    upload(client, ("jo.pdf", data), ("hibas.pdf", make_blank_pdf()))
+    data = make_pdf("torles")
+    store_invoice(client, app, data, "jo.pdf")
+    upload(client, ("hibas.pdf", make_blank_pdf()))
     wait_until_processed(client, app)
     assert len(invoices(client)) == 1
     assert len(documents(client)["documents"]) == 1
@@ -238,7 +245,6 @@ def test_delete_invoices_removes_invoices_and_failed_files_and_allows_reupload(c
     assert documents(client)["documents"] == []
     assert upload(client, ("jo.pdf", data)).json()["results"][0]["outcome"] == "accepted"
     wait_until_processed(client, app)
-    assert len(invoices(client)) == 1
 
 
 def test_delete_invoices_with_nothing_stored_is_a_noop(client):
@@ -246,8 +252,7 @@ def test_delete_invoices_with_nothing_stored_is_a_noop(client):
 
 
 def test_delete_invoices_is_refused_while_processing_is_active(client, app):
-    upload(client, ("jo.pdf", make_pdf(invoice_text("torles-2"))))
-    wait_until_processed(client, app)
+    store_invoice(client, app, make_pdf("torles-2"), "jo.pdf")
     app.state.jobs.add("h-active", "var.pdf", 1)
 
     response = client.delete("/api/invoices")
@@ -262,7 +267,7 @@ def test_cancel_endpoint_for_unknown_upload_cancels_nothing(client):
 
 
 def test_upload_accepts_an_upload_id_and_rejects_an_overlong_one(client, app):
-    payload = [("files", ("szamla.pdf", make_pdf(invoice_text("upload-id-1")), "application/pdf"))]
+    payload = [("files", ("szamla.pdf", make_pdf("upload-id"), "application/pdf"))]
 
     ok = client.post("/api/documents", files=payload, data={"upload_id": "u-1"})
     too_long = client.post("/api/documents", files=payload, data={"upload_id": "x" * 65})
@@ -313,11 +318,12 @@ def test_index_page_has_hidden_leave_warning_and_translated_text(client):
 
 @pytest.mark.parametrize("count", [30])
 def test_many_files_are_all_processed(client, app, count):
-    files = [(f"{i}.pdf", make_pdf(invoice_text(f"NW-2026-{i:04d}"))) for i in range(count)]
+    files = [(f"{i}.pdf", make_pdf(f"Számla {i}")) for i in range(count)]
 
     results = upload(client, *files).json()["results"]
     wait_until_processed(client, app)
 
     assert all(r["outcome"] == "accepted" for r in results)
-    assert len(invoices(client)) == count
-    assert documents(client)["documents"] == []
+    listed = documents(client)["documents"]
+    assert len(listed) == count
+    assert {d["error"]["code"] for d in listed} == {"llm_not_configured"}
