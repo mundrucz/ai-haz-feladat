@@ -1,11 +1,11 @@
 import pytest
-from app_settings import COMPANY_SETTINGS, make_settings
+from app_settings import REQUIRED_SETTINGS, make_settings
 from fastapi.testclient import TestClient
 
 from app.core.config import ConfigError, load_settings, resolve_locale
 from app.main import create_app
 
-REQUIRED_VARIABLES = ("COMPANY_NAME", "COMPANY_TAX_NUMBER", "COMPANY_EU_VAT")
+REQUIRED_VARIABLES = ("OPENROUTER_API_KEY", "COMPANY_NAME", "COMPANY_TAX_NUMBER", "COMPANY_EU_VAT")
 
 
 @pytest.fixture
@@ -17,12 +17,12 @@ def no_env_file(monkeypatch, tmp_path):
 
 
 @pytest.fixture
-def company_env(no_env_file, monkeypatch):
-    for key, value in COMPANY_SETTINGS.items():
+def required_env(no_env_file, monkeypatch):
+    for key, value in REQUIRED_SETTINGS.items():
         monkeypatch.setenv(key.upper(), value)
 
 
-def test_company_settings_have_no_defaults(no_env_file):
+def test_required_settings_have_no_defaults(no_env_file):
     with pytest.raises(ConfigError) as raised:
         load_settings()
 
@@ -32,7 +32,7 @@ def test_company_settings_have_no_defaults(no_env_file):
     assert ".env.example" in raised.value.message
 
 
-def test_report_currency_and_locale_have_defaults(company_env, monkeypatch):
+def test_report_currency_and_locale_have_defaults(required_env, monkeypatch):
     monkeypatch.delenv("REPORT_CURRENCY")
     monkeypatch.delenv("DEFAULT_LOCALE", raising=False)
 
@@ -41,7 +41,7 @@ def test_report_currency_and_locale_have_defaults(company_env, monkeypatch):
     assert (settings.report_currency, settings.default_locale, fallbacks) == ("HUF", "hu", [])
 
 
-def test_business_settings_come_from_the_environment(company_env, monkeypatch):
+def test_business_settings_come_from_the_environment(required_env, monkeypatch):
     monkeypatch.setenv("COMPANY_NAME", "Other Company Ltd.")
     monkeypatch.setenv("REPORT_CURRENCY", " eur ")
 
@@ -58,9 +58,11 @@ def test_business_settings_come_from_the_environment(company_env, monkeypatch):
         ("COMPANY_NAME", "  "),
         ("COMPANY_TAX_NUMBER", "no digits"),
         ("COMPANY_EU_VAT", "26481937"),
+        ("OPENROUTER_API_KEY", ""),
+        ("OPENROUTER_API_KEY", "   "),
     ],
 )
-def test_invalid_business_setting_stops_the_application(company_env, monkeypatch, name, value):
+def test_invalid_required_setting_stops_the_application(required_env, monkeypatch, name, value):
     monkeypatch.setenv(name, value)
 
     with pytest.raises(ConfigError) as raised:
@@ -69,7 +71,7 @@ def test_invalid_business_setting_stops_the_application(company_env, monkeypatch
     assert name in raised.value.message
 
 
-def test_eu_vat_may_contain_separators(company_env, monkeypatch):
+def test_eu_vat_may_contain_separators(required_env, monkeypatch):
     monkeypatch.setenv("COMPANY_EU_VAT", "hu 2648-1937")
 
     assert load_settings()[0].company_eu_vat == "hu 2648-1937"
@@ -90,7 +92,7 @@ def test_eu_vat_may_contain_separators(company_env, monkeypatch):
         ("OPENROUTER_MODEL", " ", "openrouter_model", "openai/gpt-4o-mini"),
     ],
 )
-def test_invalid_technical_setting_falls_back_to_default(company_env, monkeypatch, name, value, field, default):
+def test_invalid_technical_setting_falls_back_to_default(required_env, monkeypatch, name, value, field, default):
     monkeypatch.setenv(name, value)
 
     settings, fallbacks = load_settings()
@@ -99,7 +101,7 @@ def test_invalid_technical_setting_falls_back_to_default(company_env, monkeypatc
     assert [(f.variable, f.value, f.default) for f in fallbacks] == [(name, value, str(default))]
 
 
-def test_several_invalid_settings_fall_back_together(company_env, monkeypatch):
+def test_several_invalid_settings_fall_back_together(required_env, monkeypatch):
     monkeypatch.setenv("LLM_CONCURRENCY", "x")
     monkeypatch.setenv("MNB_TIMEOUT_SECONDS", "-5")
 
@@ -109,7 +111,7 @@ def test_several_invalid_settings_fall_back_together(company_env, monkeypatch):
     assert {f.variable for f in fallbacks} == {"LLM_CONCURRENCY", "MNB_TIMEOUT_SECONDS"}
 
 
-def test_invalid_business_setting_is_reported_even_with_technical_fallbacks(company_env, monkeypatch):
+def test_invalid_business_setting_is_reported_even_with_technical_fallbacks(required_env, monkeypatch):
     monkeypatch.setenv("LLM_CONCURRENCY", "x")
     monkeypatch.delenv("COMPANY_NAME")
 
@@ -119,7 +121,7 @@ def test_invalid_business_setting_is_reported_even_with_technical_fallbacks(comp
     assert "COMPANY_NAME" in raised.value.message
 
 
-def test_values_are_normalized(company_env, monkeypatch):
+def test_values_are_normalized(required_env, monkeypatch):
     monkeypatch.setenv("REPORT_CURRENCY", " chf ")
     monkeypatch.setenv("DEFAULT_LOCALE", "EN")
 
@@ -128,7 +130,7 @@ def test_values_are_normalized(company_env, monkeypatch):
     assert (settings.report_currency, settings.default_locale, fallbacks) == ("CHF", "en", [])
 
 
-def test_fallback_is_logged_at_startup(company_env, monkeypatch, tmp_path, capsys):
+def test_fallback_is_logged_at_startup(required_env, monkeypatch, tmp_path, capsys):
     monkeypatch.setenv("DATABASE_PATH", str(tmp_path / "app.db"))
     monkeypatch.setenv("LLM_CONCURRENCY", "lots")
 
@@ -146,17 +148,22 @@ def test_environment_overrides_defaults(monkeypatch):
     assert make_settings().openrouter_model == "some/model"
 
 
-def test_llm_is_unavailable_without_key(monkeypatch):
-    monkeypatch.setenv("OPENROUTER_API_KEY", "secret")
+def test_empty_api_key_in_env_file_stops_the_application(required_env, monkeypatch, tmp_path):
+    monkeypatch.delenv("OPENROUTER_API_KEY")
+    (tmp_path / ".env").write_text("OPENROUTER_API_KEY=\n", encoding="utf-8")
 
-    assert make_settings().llm_available is True
-    assert make_settings(openrouter_api_key=None).llm_available is False
+    with pytest.raises(ConfigError) as raised:
+        create_app()
+
+    assert "OPENROUTER_API_KEY" in raised.value.message
 
 
-def test_api_key_is_not_leaked_in_repr(monkeypatch):
-    monkeypatch.setenv("OPENROUTER_API_KEY", "super-secret-key")
+def test_api_key_is_trimmed():
+    assert make_settings(openrouter_api_key=" secret \n").openrouter_api_key.get_secret_value() == "secret"
 
-    assert "super-secret-key" not in repr(make_settings())
+
+def test_api_key_is_not_leaked_in_repr():
+    assert "super-secret-key" not in repr(make_settings(openrouter_api_key="super-secret-key"))
 
 def test_existing_locale_is_kept():
     settings = make_settings(default_locale="en")
