@@ -11,11 +11,11 @@ def test_failures_are_logged_with_source_hash_upload_and_hungarian_reason(failed
     running, _ = jobs.add("hash-run", "futo.pdf", 7, upload_id="u1")
     jobs.claim(running.id)
     jobs.mark_failed(running.id, "incomplete_data", "missing", ("due_date",))
-    queued, _ = jobs.add("hash-queued", "sorban.pdf", 9, upload_id="u2")
+    jobs.add("hash-queued", "sorban.pdf", 9, upload_id="u2")
     jobs.cancel_pending("u2")
 
     seen = {r.file_name: r for r in failed_log}
-    assert [r.file_name for r in failed_log] == ["ures.pdf", "masolat.pdf", "futo.pdf", "sorban.pdf"]
+    assert [r.file_name for r in failed_log] == ["ures.pdf", "masolat.pdf", "futo.pdf"]
     assert (seen["ures.pdf"].source, seen["ures.pdf"].upload_id, seen["ures.pdf"].error_text) == (
         "intake",
         "u1",
@@ -26,9 +26,6 @@ def test_failures_are_logged_with_source_hash_upload_and_hungarian_reason(failed
     assert seen["futo.pdf"].error_fields == ["due_date"]
     assert seen["futo.pdf"].error_message == "missing"
     assert seen["futo.pdf"].job_id == running.id
-    assert (seen["sorban.pdf"].source, seen["sorban.pdf"].upload_id) == ("cancelled", "u2")
-    assert seen["sorban.pdf"].error_text.startswith("Megszakítva")
-    assert queued.id == seen["sorban.pdf"].job_id
 
 
 def test_new_content_is_created_pending_and_in_progress_content_is_duplicate():
@@ -86,7 +83,7 @@ def test_listing_is_newest_first_and_can_be_filtered_by_ids():
     assert [job.id for job in jobs.list_all([first.id, 999])] == [first.id]
 
 
-def test_cancel_pending_affects_only_pending_jobs_of_that_upload():
+def test_cancel_pending_forgets_only_pending_jobs_of_that_upload():
     jobs = JobTracker()
     mine, _ = jobs.add("h1", "a.pdf", 1, upload_id="u1")
     running, _ = jobs.add("h2", "b.pdf", 1, upload_id="u1")
@@ -95,11 +92,13 @@ def test_cancel_pending_affects_only_pending_jobs_of_that_upload():
 
     assert jobs.cancel_pending("u1") == 1
 
-    assert (mine.status, mine.error_code) == (JobStatus.FAILED, "cancelled")
+    assert jobs.get(mine.id) is None
+    assert {job.id for job in jobs.list_all()} == {running.id, other.id}
     assert running.status is JobStatus.PROCESSING
     assert other.status is JobStatus.PENDING
     assert jobs.claim(mine.id) is None
     assert jobs.cancel_pending("u1") == 0
+    assert jobs.clear_failed() == 0
 
 
 def test_clear_failed_forgets_failed_and_rejected_files_but_keeps_active_ones():
@@ -132,10 +131,10 @@ def test_has_active_counts_only_pending_and_processing_jobs():
 
 def test_cancelled_file_can_be_uploaded_again():
     jobs = JobTracker()
-    job, _ = jobs.add("h1", "a.pdf", 1, upload_id="u1")
+    jobs.add("h1", "a.pdf", 1, upload_id="u1")
     jobs.cancel_pending("u1")
 
     again, outcome = jobs.add("h1", "a.pdf", 1, upload_id="u2")
 
-    assert outcome is AddOutcome.REQUEUED
-    assert (again.id, again.status, again.upload_id) == (job.id, JobStatus.PENDING, "u2")
+    assert outcome is AddOutcome.CREATED
+    assert (again.status, again.upload_id) == (JobStatus.PENDING, "u2")

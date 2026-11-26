@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 import logging
 from collections.abc import Iterable
@@ -79,15 +80,19 @@ class UploadService:
         if outcome is AddOutcome.DUPLICATE:
             return self._duplicate(name, len(data), upload_id, content_hash, job.id)
         try:
-            stored = await self._invoices.exists(content_hash)
+            if await self._invoices.exists(content_hash):
+                self._jobs.finish(job.id)
+                return self._duplicate(name, len(data), upload_id, content_hash)
+            # Tele sornál itt vár; így a kérés válasza, és vele a böngésző következő csomagja is késik.
+            await self._processor.enqueue(job.id, data)
+        except asyncio.CancelledError:
+            # Megszakított kérés után ne maradjon örökké „sorban álló” bejegyzés, ami a sorba sosem került be.
+            self._jobs.finish(job.id)
+            raise
         except Exception:
             logger.exception("upload failed", extra={"upload_name": name})
             self._jobs.finish(job.id)
             return self._reject(name, len(data), "unexpected_error", upload_id, content_hash)
-        if stored:
-            self._jobs.finish(job.id)
-            return self._duplicate(name, len(data), upload_id, content_hash)
-        self._processor.enqueue(job.id, data)
         return UploadResult(name, UploadOutcome.ACCEPTED, job.id)
 
     async def ingest_many(
