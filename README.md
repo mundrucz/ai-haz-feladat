@@ -308,29 +308,21 @@ docker run --rm -u root -v "${PWD}\tests:/app/tests:ro" -v "${PWD}\pytest.ini:/a
 ## Ismert korlátok
 
 - **LLM nélkül nincs kinyerés:** nincs szabályalapú tartalék. Kulcs nélkül az alkalmazás el sem indul; ha a kulcs érvénytelen, a keret elfogyott vagy az LLM nem elérhető, minden fájl LLM-hibakódot kap (`llm_auth`, `llm_quota`, `llm_unavailable` stb., lásd „Hibakódok”), és újrafeltöltéssel próbálható újra.
-- **Nincs LLM-keret:** minden új fájl egy hívás; a már feldolgozott fájlt nem küldjük újra. -> Bemenet méretkorlátja: túl hosszú szövegnél hiba vagy csonkolás. Ez a hívásonkénti költséget fogja meg, de a többoldalas számláknál kockázatos.
 - **Nem felvett hónapnév:** ha a dátum nem felvett nyelvű hónapnévvel szerepel (például „15 maart 2026”), a grounding csak a napot és az évet ellenőrzi, a hónapot nem.
-- **Partnerazonosítás:** csak a magyar adószám-formákat egységesítjük. Külföldi partnernél, ha az egyik számlán EU-adószám, a másikon nemzeti adószám szerepel, ugyanaz a cég két oszlopba kerülhet.
-- **Irány nélküli számla:** ha a saját cég szokatlan alakban szerepel (más adószámforma, eltérő jogi forma), a számla `no_direction` jelölést kap, és kimarad az összesítésből; a hiány csak a számlalistában látszik.
-- **Előlegszámla:** az előre fizetett előlegszámla (`due_before_issue`) ellenőrzendő jelölést kap, és kimarad a kimutatásból. A validáció nem ismeri a számlatípusokat; a sztornót csak a negatív végösszeg jelzi.
-- **Jövőbeli teljesítés:** a feldolgozáskor jövőbeli teljesítésű számla kimarad a kimutatásból, és a teljesítés napja után sem kerül be magától: a fájlt újra fel kell tölteni (ez már nem hív LLM-et). Ha a fájl nincs meg, csak az összes számla törlése és újrafeltöltés segít.
 - **MNB-kiesés:** a nem tárolt árfolyamú devizás számlák kimaradnak az összesítésből; a „Hibás fájlok” listában és a számlalistában látszanak az okukkal.
-- **Rögzített kimutatás-tartalom:** nem állítható, mely csoportok (sztornó, jövőbeli, ellenőrzendő) kerüljenek a diagramba és az összesítőbe.
 - **Tételsor-ellenőrzés:** csak felismerhető mennyiség × egységár = sorösszeg szerkezetnél fut, legalább 2 sorral.
-- **A kinyert adat nem javítható:** nincs szerkesztés és jóváhagyás, csak az összes számla törlése és újrafeltöltés. A PDF-et szándékosan nem tároljuk, ezért újrakinyeréshez újra fel kell tölteni.
-- **Memóriabeli állapot, egy worker:** a folyamatban lévő és a hibás fájlok listája újraindításkor elvész (a hibanapló megmarad), és minden felhasználónak közös. Új feltöltés indulásakor a lista kiürül, egy párhuzamos menet hibáival együtt. Emiatt az alkalmazás szándékosan egy uvicorn-folyamattal fut.
-- **Nincs hitelesítés:** bárki, aki eléri az oldalt, törölheti az összes számlát.
-- **Skálázás:** egy SQLite-adatbázis és egy worker; a „Hibás fájlok” listája legfeljebb 500 kimaradó számlát mutat (a darabszám a teljes).
-- **A felület csak magyar,** de a szövegek nyelvi fájlban vannak.
 
 ## Továbbfejlesztési ötletek
 
-- Pontosságmérés referenciaértékekkel (golden set) éles LLM-mel, mezőnkénti hibaaránnyal, és modellek összevetése.
-- Szerkesztés és jóváhagyás az ellenőrzendő számlákra, egyenkénti törlés.
-- Számlatípus (sztornó, előleg, helyesbítő) felismerése LLM-mezővel és típusfüggő szabályok, hogy az előlegszámla ne legyen ellenőrzendő.
+- LLM-használat korlátozása és nagy bemenetek kezelése: napi híváskeret, valamint a modell bemeneti méretkorlátjának ellenőrzése. Jelenleg minden új fájl egy LLM-hívást indít; a túl hosszú szöveg hibát vagy csonkolást okozhat.
+- Számlaadatok javítása: az ellenőrzendő mezők szerkesztése és jóváhagyása, egyenkénti törlés. Jelenleg nincs szerkesztés, a PDF-et pedig szándékosan nem tároljuk, így újrakinyeréshez ismét fel kell tölteni.
+- Számlatípus (sztornó, előleg, helyesbítő) felismerése LLM-mezővel és típusfüggő szabályok; jelenleg az előlegszámla ellenőrzendő lehet, a sztornót pedig csak a negatív végösszeg jelzi.
 - Állítható kimutatás-tartalom: a felületen ki-be kapcsolható, mely csoportok (sztornó, jövőbeli teljesítésű, ellenőrzendő) kerüljenek a diagramba és az összesítőbe; esetleg csoportonként külön kimutatás (például csak a jövőbeli számlák várható cash-flow-ja, vagy az ellenőrzendők összege).
-- Rugalmasabb partner- és saját cég-egyezés: ország-előtag nélküli számjegymag, jogi forma nélküli név, a fél összes azonosítójának tárolása, kézi összevonás.
-- A feldolgozási állapot az adatbázisba kerüljön (tartós, több worker, menetenkénti hibalista).
+- Rugalmasabb partner- és saját cég-egyezés: ország-előtag nélküli számjegymag, jogi forma nélküli név, a fél összes azonosítójának tárolása, kézi összevonás. Ez csökkentené annak esélyét, hogy egy külföldi partner több oszlopba kerüljön, vagy a saját cég szokatlan alakja miatt az irány felismeretlen maradjon.
+- A jövőbeli teljesítésű számlák automatikus újraértékelése a teljesítés napján. Jelenleg a teljesítés napja után az eredeti fájlt újra fel kell tölteni; ha nincs meg, csak az összes számla törlése és újrafeltöltése segít.
+- A feldolgozási állapot tartós tárolása az adatbázisban, több alkalmazásfolyamat és menetenkénti hibalista. Jelenleg a folyamatban lévő és hibás fájlok állapota memóriabeli, újraindításkor elvész, és a felhasználók között közös.
+- A kimaradó számlák listájának lapozása vagy exportálása; a jelenlegi lista legfeljebb 500 tételt mutat.
 - Export (CSV vagy Excel, a diagram képként), nyomtatóbarát nézet, keresés, rendezés.
-- LLM-keret (napi hívásszám-korlát), egyszerű hitelesítés, a hibanapló letöltése a felületről, további felületi nyelvek.
+- Hitelesítés és jogosultságkezelés; jelenleg minden elérő felhasználó törölheti az összes számlát.
+- A hibanapló letöltése a felületről és további felületi nyelvek; jelenleg a felület csak magyarul érhető el.
 - Statikus kódelemzés (például SonarCloud) és lefedettségmérés CI-ban.
