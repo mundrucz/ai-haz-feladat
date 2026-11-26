@@ -256,14 +256,6 @@ async def test_invoice_without_performance_date_is_rejected_and_not_stored(invoi
     assert await invoices.list_all() == []
 
 
-async def test_without_llm_the_file_fails_with_a_clear_reason(invoices):
-    with pytest.raises(ProcessingError) as error:
-        await InvoiceAnalyzer(None, invoices, COMPANY).analyze("h1", "x.pdf", TEXT)
-
-    assert error.value.code == "llm_not_configured"
-    assert await invoices.list_all() == []
-
-
 _UNRECOGNISED_US = dict(seller_name="Nordwind Solutions Ltd.", seller_tax_id="HU 26481937 / 2-43")
 
 

@@ -39,15 +39,20 @@ def _eu_vat_format(value: str) -> str:
     return value
 
 
+def _non_blank_secret(value: SecretStr) -> SecretStr:
+    stripped = value.get_secret_value().strip()
+    if not stripped:
+        raise ValueError("must not be empty")
+    return SecretStr(stripped)
+
+
 Text = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+ApiKey = Annotated[SecretStr, AfterValidator(_non_blank_secret)]
 HttpUrl = Annotated[str, StringConstraints(strip_whitespace=True, pattern=r"^https?://\S+$")]
 CurrencyCode = Annotated[str, BeforeValidator(_strip_upper), StringConstraints(pattern=r"^[A-Z]{3}$")]
 TaxNumber = Annotated[Text, AfterValidator(_has_digit)]
 EuVatNumber = Annotated[Text, AfterValidator(_eu_vat_format)]
 Locale = Annotated[str, BeforeValidator(_strip_lower), StringConstraints(pattern=r"^[a-z]{2,3}([-_][a-z0-9]+)?$")]
-
-# Ezeknél a bemenet értékét nem írjuk a naplóba
-_SECRET_FIELDS = frozenset({"openrouter_api_key"})
 
 
 class ConfigError(AppError):
@@ -69,12 +74,13 @@ class Settings(BaseSettings):
 
     A saját cég adatainak szándékosan nincs alapértéke: egy másik cég
     adataival csendben rossz irányt kapna minden számla, ezért ezek hiányában az alkalmazás nem indul el.
+    Az LLM-kulcs is kötelező: nélküle egyetlen számla sem dolgozható fel.
     A többi mező érvénytelen értéke helyett a `load_settings` az alapértéket használja.
     """
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    openrouter_api_key: SecretStr | None = None
+    openrouter_api_key: ApiKey
     openrouter_model: Text = "openai/gpt-4o-mini"
     openrouter_base_url: HttpUrl = "https://openrouter.ai/api/v1"
     llm_timeout_seconds: PositiveFloat = 60.0
@@ -109,14 +115,8 @@ class Settings(BaseSettings):
     def max_upload_bytes(self) -> int:
         return self.max_upload_mb * 1024 * 1024
 
-    @property
-    def llm_available(self) -> bool:
-        return self.openrouter_api_key is not None
 
-
-def _shown_value(field: str, value: Any) -> str:
-    if field in _SECRET_FIELDS:
-        return "***"
+def _shown_value(value: Any) -> str:
     text = str(value)
     return text if len(text) <= 80 else text[:77] + "..."
 
@@ -144,7 +144,7 @@ def load_settings() -> tuple[Settings, list[ConfigFallback]]:
                 default = info.get_default(call_default_factory=True)
                 forced[field] = default
                 fallbacks.append(
-                    ConfigFallback(field.upper(), _shown_value(field, error["input"]), error["msg"], str(default))
+                    ConfigFallback(field.upper(), _shown_value(error["input"]), error["msg"], str(default))
                 )
             if missing:
                 raise ConfigError(

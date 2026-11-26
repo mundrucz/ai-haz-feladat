@@ -7,11 +7,6 @@ from app_settings import make_settings
 from fastapi.testclient import TestClient
 from pdfs import make_pdf
 
-from app.core.errors import ProcessingError
-from app.db.database import Database
-from app.extraction.company import Company
-from app.repositories.invoice_repository import InvoiceRepository
-from app.services.invoice_service import InvoiceAnalyzer
 from app.clients.llm_client import (
     LlmAuthError,
     LlmClient,
@@ -23,8 +18,6 @@ from app.clients.llm_client import (
     LlmUnavailableError,
 )
 from app.main import create_app
-
-COMPANY = Company("Nordwind Solutions Kft.", "26481937-2-43", "HU26481937")
 
 GOOD_ANSWER = {
     "invoice_number": "NW-2026-0001",
@@ -191,36 +184,11 @@ async def test_client_limits_concurrency():
     assert peak == 2
 
 
-# --- InvoiceAnalyzer: LLM-kinyerés ---------------------------------------------
-
-
-@pytest.fixture
-async def repository(tmp_path):
-    db = Database(tmp_path / "t.db")
-    await db.init()
-    return InvoiceRepository(db)
-
-
-def analyzer(repository) -> InvoiceAnalyzer:
-    return InvoiceAnalyzer(None, repository, COMPANY)
-
-
-async def test_without_llm_the_file_fails_and_nothing_is_stored(repository):
-    with pytest.raises(ProcessingError) as raised:
-        await analyzer(repository).analyze("h1", "a.pdf", UNKNOWN_FORMAT_TEXT)
-
-    assert raised.value.code == "llm_not_configured"
-    assert await repository.list_all() == []
-
-
 # --- végponttól végpontig ----------------------------------------------------
 
 
 def llm_app(tmp_path, handler) -> TestClient:
-    settings = make_settings(
-        database_path=tmp_path / "e2e.db",
-        openrouter_api_key="test-key",
-    )
+    settings = make_settings(database_path=tmp_path / "e2e.db")
     http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     return create_app(settings, http_client=http)
 

@@ -66,22 +66,19 @@ def create_app(settings: Settings | None = None, http_client: httpx.AsyncClient 
     invoice_repository = InvoiceRepository(db)
     company = Company(settings.company_name, settings.company_tax_number, settings.company_eu_vat)
 
-    llm_extractor = None
-    # Az MNB-hez mindig kell HTTP-kliens, az LLM-hez csak ha elérhető
     owned_http: httpx.AsyncClient | None = None
     if http_client is None:
         http_client = owned_http = httpx.AsyncClient()
-    if settings.llm_available:
-        llm_extractor = LlmExtractor(
-            LlmClient(
-                http_client,
-                api_key=settings.openrouter_api_key.get_secret_value(),
-                model=settings.openrouter_model,
-                base_url=settings.openrouter_base_url,
-                timeout=settings.llm_timeout_seconds,
-                concurrency=settings.llm_concurrency,
-            )
+    llm_extractor = LlmExtractor(
+        LlmClient(
+            http_client,
+            api_key=settings.openrouter_api_key.get_secret_value(),
+            model=settings.openrouter_model,
+            base_url=settings.openrouter_base_url,
+            timeout=settings.llm_timeout_seconds,
+            concurrency=settings.llm_concurrency,
         )
+    )
 
     mnb_client = MnbClient(
         http_client,
@@ -116,9 +113,7 @@ def create_app(settings: Settings | None = None, http_client: httpx.AsyncClient 
         setup_failed_files_log(settings.failed_files_log_path)
         await db.init()
         await processor.start()
-        if not settings.llm_available:
-            logger.warning("OPENROUTER_API_KEY is not set, invoices cannot be extracted")
-        logger.info("application started", extra={"llm_available": settings.llm_available})
+        logger.info("application started", extra={"llm_model": settings.openrouter_model})
         try:
             yield
         finally:

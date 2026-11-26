@@ -34,9 +34,8 @@ class CurrencyCheck(Protocol):
 class InvoiceAnalyzer:
     """Szövegből számlaadat: LLM-es kinyerés, validáció, osztályozás, mentés.
 
-    Ha nincs beállított LLM-kulcs, minden számla `llm_not_configured` hibát kap. Ha az LLM válasza hiányos vagy
-    érvénytelen, a feldolgozás hiba, és semmi nem tárolódik. Gyanús érték (pl. irány nélküli számla) esetén
-    a számla ellenőrzendőként tárolódik.
+    Ha az LLM válasza hiányos vagy érvénytelen, a feldolgozás hiba, és semmi nem tárolódik. Gyanús érték
+    (pl. irány nélküli számla) esetén a számla ellenőrzendőként tárolódik.
 
     Ha van `currency_check`, a mentés előtt kiderül, hogy az MNB jegyzi-e a számla devizáját (a kimutatás
     pénzneme kivételével); ha nem, a számla ellenőrzendő.
@@ -44,7 +43,7 @@ class InvoiceAnalyzer:
 
     def __init__(
         self,
-        llm: Extractor | None,
+        llm: Extractor,
         repository: InvoiceRepository,
         company: Company,
         currency_check: CurrencyCheck | None = None,
@@ -57,8 +56,6 @@ class InvoiceAnalyzer:
         self._report_currency = report_currency
 
     async def analyze(self, content_hash: str, filename: str, text: str) -> None:
-        if self._llm is None:
-            raise ProcessingError("no LLM API key is set, invoices cannot be extracted", code="llm_not_configured")
         fields = await self._llm.extract(text)
         validation = self._assess(fields, text)
         validation = await self._with_currency_check(validation, fields.currency)

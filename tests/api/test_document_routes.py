@@ -52,7 +52,7 @@ def invoices(client):
     return client.get("/api/invoices").json()["invoices"]
 
 
-def test_upload_without_llm_key_fails_with_clear_reason_and_stores_no_pdf(client, app, settings):
+def test_upload_with_failing_llm_shows_clear_reason_and_stores_no_pdf(client, app, settings):
     response = upload(client, ("szamla.pdf", make_pdf("Számla")))
 
     assert response.status_code == 200
@@ -62,7 +62,7 @@ def test_upload_without_llm_key_fails_with_clear_reason_and_stores_no_pdf(client
 
     wait_until_processed(client, app)
     (job,) = documents(client)["documents"]
-    assert (job["filename"], job["status"], job["error"]["code"]) == ("szamla.pdf", "failed", "llm_not_configured")
+    assert (job["filename"], job["status"], job["error"]["code"]) == ("szamla.pdf", "failed", "llm_auth")
     assert invoices(client) == []
     assert not list(settings.database_path.parent.glob("**/*.pdf"))
 
@@ -105,7 +105,7 @@ def test_bad_files_are_reported_as_errors_and_nothing_is_stored(client, app):
     assert by_name["jelszavas.pdf"]["error"]["code"] == "password_protected"
     assert by_name["ures-oldal.pdf"]["error"]["code"] == "no_text"
     assert by_name["serult.pdf"]["status"] == "failed"
-    assert by_name["szoveges.pdf"]["error"]["code"] == "llm_not_configured"
+    assert by_name["szoveges.pdf"]["error"]["code"] == "llm_auth"
     assert by_name["nem-pdf.pdf"]["error"]["message"]
     assert invoices(client) == []
 
@@ -326,4 +326,4 @@ def test_many_files_are_all_processed(client, app, count):
     assert all(r["outcome"] == "accepted" for r in results)
     listed = documents(client)["documents"]
     assert len(listed) == count
-    assert {d["error"]["code"] for d in listed} == {"llm_not_configured"}
+    assert {d["error"]["code"] for d in listed} == {"llm_auth"}

@@ -121,7 +121,6 @@
   "error.duplicate_invoice": "Ez a számla (kiállító adószáma + számlaszám) már tárolva van másik fájlból",
   "error.duplicate_file": "Duplikátum: ugyanezt a fájlt (azonos tartalom) már feltöltötted.",
   "error.llm_unavailable": "Az LLM nem elérhető vagy időtúllépés történt, töltsd fel újra később.",
-  "error.llm_not_configured": "Nincs beállítva az LLM kulcsa (OPENROUTER_API_KEY), ezért a számla adatai nem nyerhetők ki.",
   "error.llm_rate_limited": "Az LLM kérésszám-korlátja miatt nem sikerült feldolgozni, töltsd fel újra később.",
   "error.llm_auth": "Az LLM kulcsa érvénytelen vagy hiányzik a jogosultság.",
   "error.llm_quota": "Az LLM kerete elfogyott.",
