@@ -170,6 +170,21 @@ async def test_mnb_failure_marks_only_affected_invoices(setup):
     assert report["months"][0]["outgoing"] == 2000
 
 
+async def test_mnb_failure_keeps_invoices_whose_rate_is_already_stored(setup):
+    db, invoices = setup
+    await add(invoices, "OLD", fields(invoice_number="OLD", currency="EUR", performance_date=date(2026, 1, 12)))
+    source = FixedSource({"EUR": (1, "400")})
+    report_service = make_report(db, invoices, source)
+    await report_service.build()
+    await add(invoices, "NEW", fields(invoice_number="NEW", currency="EUR", performance_date=date(2026, 5, 12)))
+    source.fail = {"EUR"}
+
+    report = await report_service.build()
+
+    assert (row(report, "OLD")["amount"], row(report, "OLD")["problem"]) == (508000, None)
+    assert (row(report, "NEW")["amount"], row(report, "NEW")["problem"]) == (None, "mnb_unavailable")
+
+
 async def test_currency_unknown_to_mnb_is_reported_not_guessed(setup):
     db, invoices = setup
     await add(invoices, "X", fields(invoice_number="X", currency="XYZ"))
@@ -254,12 +269,11 @@ def test_month_range_is_continuous_across_years():
 
 def test_partner_key_ignores_country_prefix_and_group_digits():
     keys = {
-        partner_key("12345678-2-42", None),
-        partner_key("HU12345678", None),
-        partner_key("12345678", "Más név"),
-        partner_key(" hu 12345678 ", None),
+        partner_key("12345678-2-42"),
+        partner_key("HU12345678"),
+        partner_key("12345678"),
+        partner_key(" hu 12345678 "),
     }
     assert keys == {"12345678"}
-    assert partner_key("DE123456789", None) == "DE123456789"
-    assert partner_key(None, "Ékezetes Név Kft.") == "EKEZETESNEVKFT"
-    assert partner_key(None, None) is None
+    assert partner_key("DE123456789") == "DE123456789"
+    assert partner_key("-") is None
