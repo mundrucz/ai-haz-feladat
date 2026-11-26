@@ -204,9 +204,7 @@ def test_cancel_endpoint_stops_queued_files_of_the_upload(client, app):
     assert response.status_code == 200
     assert response.json() == {"cancelled": 1}
     entries = {entry["filename"]: entry for entry in documents(client)["documents"]}
-    assert entries["sorban.pdf"]["status"] == "failed"
-    assert entries["sorban.pdf"]["error"]["code"] == "cancelled"
-    assert "újra feltölthető" in entries["sorban.pdf"]["error"]["message"]
+    assert "sorban.pdf" not in entries
     assert entries["masik.pdf"]["status"] == "pending"
     assert jobs.claim(queued.id) is None
     assert jobs.claim(other.id) is not None

@@ -13,9 +13,11 @@ InvoiceAnalysis = Callable[[str, str, str], Awaitable[None]]
 
 
 class DocumentProcessor:
-    """Háttérfeldolgozó: korlátozott számú munkás, folyamaton belüli sorral.
+    """Háttérfeldolgozó: korlátozott számú munkás, folyamaton belüli, korlátos sorral.
 
     A PDF bájtjai csak a sorban, a feldolgozás idejére élnek a memóriában, lemezre nem kerülnek.
+    A sor mérete korlátos: ha megtelt, az `enqueue` megvárja a szabad helyet, így a feltöltés a
+    feldolgozás tempójához igazodik, és a memóriában tartott PDF-ek száma nem nő a fájlok számával.
     Egy dokumentum hibája csak az adott dokumentumot érinti; a munkások nem állnak le.
     Az `analyze(content_hash, filename, text)` állítja elő és menti a számlaadatot.
     """
@@ -26,12 +28,13 @@ class DocumentProcessor:
         extractor: TextExtractor,
         analyze: InvoiceAnalysis,
         concurrency: int = 4,
+        queue_size: int = 8,
     ) -> None:
         self._jobs = jobs
         self._extractor = extractor
         self._analyze = analyze
         self._concurrency = max(1, concurrency)
-        self._queue: asyncio.Queue[tuple[int, bytes]] = asyncio.Queue()
+        self._queue: asyncio.Queue[tuple[int, bytes]] = asyncio.Queue(maxsize=max(1, queue_size))
         self._workers: list[asyncio.Task] = []
 
     async def start(self) -> None:
@@ -43,8 +46,9 @@ class DocumentProcessor:
         await asyncio.gather(*self._workers, return_exceptions=True)
         self._workers = []
 
-    def enqueue(self, job_id: int, data: bytes) -> None:
-        self._queue.put_nowait((job_id, data))
+    async def enqueue(self, job_id: int, data: bytes) -> None:
+        """Sorba állít; ha a sor tele van, vár, amíg egy munkás helyet szabadít fel."""
+        await self._queue.put((job_id, data))
 
     async def join(self) -> None:
         await self._queue.join()

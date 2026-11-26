@@ -30,8 +30,8 @@ async def test_unexpected_extractor_error_fails_only_that_job_and_finished_job_d
 
     processor = DocumentProcessor(jobs, extractor, noop_analysis, concurrency=2)
     await processor.start()
-    processor.enqueue(good.id, good_data)
-    processor.enqueue(bad.id, bad_data)
+    await processor.enqueue(good.id, good_data)
+    await processor.enqueue(bad.id, bad_data)
     await asyncio.wait_for(processor.join(), 5)
     await processor.stop()
 

@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
 
-from app.services.failed_file_service import SOURCE_CANCELLED, SOURCE_INTAKE, SOURCE_PROCESSING, FailedFileLog
+from app.services.failed_file_service import SOURCE_INTAKE, SOURCE_PROCESSING, FailedFileLog
 
 MAX_FAILED_FILES = 500
 
@@ -109,23 +109,20 @@ class JobTracker:
             self._register_failure(job, source)
 
     def cancel_pending(self, upload_id: str) -> int:
-        """Az adott feltöltés még fel nem dolgozott (`pending`) fájljait megszakítja; a futók befejeződnek.
+        """Az adott feltöltés még fel nem dolgozott (`pending`) fájljait nyom nélkül elfelejti; a futók befejeződnek.
 
-        A megszakított fájl hibásként marad a listában, és újra feltölthető. A `claim` a nem `pending`
-        feladatot már nem indítja el, ezért a sorban várakozó példány hatástalan lesz.
+        A megszakított fájl nem kerül a hibás fájlok közé és a hibanaplóba sem; csak a böngésző összegzése
+        számolja. A `claim` a már nem létező feladatot nem indítja el, ezért a sorban várakozó példány hatástalan.
         """
         cancelled = [
             job for job in self._jobs.values() if job.upload_id == upload_id and job.status is JobStatus.PENDING
         ]
         for job in cancelled:
-            self.mark_failed(job.id, "cancelled", "upload cancelled", source=SOURCE_CANCELLED)
+            self._forget(job)
         return len(cancelled)
 
     def clear_failed(self) -> int:
-        """Elfelejti a hibás fájlokat (új feltöltés kezdetén); a folyamatban lévők érintetlenek.
-
-        A sorban maradt megszakított feladat azonosítója ilyenkor megszűnik, a `claim` ezért nem indítja el.
-        """
+        """Elfelejti a hibás fájlokat (új feltöltés kezdetén); a folyamatban lévők érintetlenek."""
         failed = [self._jobs[job_id] for job_id in self._failed]
         for job in failed:
             self._forget(job)

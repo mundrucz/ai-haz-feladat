@@ -12,7 +12,6 @@ from app.core.logging_config import FAILED_FILES_LOGGER
 
 SOURCE_INTAKE = "intake"
 SOURCE_PROCESSING = "processing"
-SOURCE_CANCELLED = "cancelled"
 SOURCE_REPORT = "report"
 
 _logger = logging.getLogger(FAILED_FILES_LOGGER)
@@ -37,7 +36,7 @@ class FailedFileLog:
         job_id: int | None = None,
         invoice_id: int | None = None,
     ) -> None:
-        """`source`: hol akadt el a fájl (beléptetés, feldolgozás, megszakítás vagy az összesítésből kimaradás)."""
+        """`source`: hol akadt el a fájl (beléptetés, feldolgozás vagy az összesítésből kimaradás)."""
         _logger.info(
             "failed file",
             extra={
