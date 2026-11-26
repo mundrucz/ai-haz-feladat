@@ -259,3 +259,40 @@ A fejlesztő kérései, egyenként megvalósítva:
 - **AI javaslata:** különálló kapcsolódási és olvasási időkorlát; kapcsolódás 5 mp, LLM-olvasás 30 mp, MNB-olvasás 10 mp. Figyelmeztetett, hogy túl alacsony értéknél a lassú, de jó LLM-válasz is időtúllépést kap, és az újrapróbálás újabb fizetős hívás.
 - **Döntés (felhasználó):** kapcsolódás 5 mp, LLM 15 mp, MNB 5 mp.
 - **Eredmény:** új `HTTP_CONNECT_TIMEOUT_SECONDS` (5) beállítás, `LLM_TIMEOUT_SECONDS` 60 → 15, `MNB_TIMEOUT_SECONDS` 20 → 5. A kliensek `httpx.Timeout(olvasás, connect=kapcsolódás)` objektumot küldenek; tesztek ellenőrzik a kérésben átadott értékeket. A helyi `.env` 60 mp-es értékét is átírtuk, mert az felülírta volna az új alapértéket.
+
+- **Kérés:** ha a teljesítés dátuma jövőbeli, ne foglalkozzunk vele, legyen hibás, és írjuk ki, hogy „teljesítés jövőbeli dátum, nincs hozzá árfolyam”.
+- **Az AI kérdései és a döntések (felhasználó):**
+  - a számla tárolódik, de kimarad a diagramból és az összesítőből, és a „Hibás fájlok” listában látszik; a teljesítés napja után sem kerül be magától;
+  - az azonos fájl újrafeltöltésekor LLM-hívás nélkül, a tárolt adatokból újraértékelünk: ha a nap már elérkezett, a számla bekerül;
+  - minden jövőbeli teljesítésű számla kimarad, a forintos is (bár annak nem kellene árfolyam).
+- **Eredmény:**
+  - validáció: új `info` súlyosság, amely nem teszi ellenőrzendővé a számlát; a jövőbeli teljesítés `future_performance` jelölést kap. Az elemző (`InvoiceAnalyzer`) injektált órát kap;
+  - kimutatás: a jelölt számlára nem kérünk árfolyamot; új kizárási ok (`future_performance`), a becsült árfolyam (`estimated`) megszűnt;
+  - feltöltés: a már tárolt fájlnál, ha a teljesítés napja elérkezett, a jelölés lekerül, és az eredmény `updated` („Újraértékelve”); különben marad a duplikátum;
+  - adatmigráció (`0003`): a már tárolt jövőbeli teljesítésű számlák megkapják a jelölést;
+  - felület: „Jövőbeli teljesítés” címke, a csoport magyarázata és a lefedettségi sor az új szabályt írja le; a becsült árfolyamra vonatkozó szövegek törölve;
+  - tesztek: jelölés a feldolgozáskor (és a teljesítés napján nincs jelölés), kizárás a kimutatásból MNB-hívás nélkül, újrafeltöltés a teljesítés napja előtt és után, migráció.
+
+### Kimutatás frissítése feldolgozás közben
+- **Kérés:** a kimutatás 4 másodpercenként rajzolódjon újra; a felületen látszódjon, hogy a feldolgozás még tart, és sem a kimutatás, sem az összesítő nem végleges. Az ellenőrzendő számlák Bruttó (HUF) cellájában ne legyen külön „nem szerepel a kimutatásban” megjegyzés.
+- **Eredmény:** a fájllista továbbra is 1,5 másodpercenként frissül, a kimutatás (diagram, összesítő, számlalista) külön időzítővel 4 másodpercenként; a munka végén egy végleges frissítés jön. A három szakasz fölött „nem végleges” jelzés látszik, amíg feltöltés vagy feldolgozás tart. Az ellenőrzendő állapot csak az Állapot oszlopban látszik. Teszt ellenőrzi, hogy a jelzés mindhárom szakaszban szerepel az oldalon.
+
+### Skálázás: tárolt átváltás, SQL-összesítés, lapozás
+- **Kérés:** javítsuk az ismert korlátot: „a számlalista lapozás nélkül töltődik be, a kimutatás minden lekérdezéskor újraszámolódik”.
+- **AI-javaslat:** két lehetőséget kínált fel; az (A): az átváltás eredményét a számla sorában tároljuk, az összesítést SQL számolja, a lista szerveroldalon lapoz. A felhasználó előbb kihagyta a kérdést, majd rákérdezett a két lehetőségre, és a magyarázat után az A-t választotta.
+- **Eredmény:**
+  - adatmodell (`0004`): az `invoices` sor tárolja az átváltást (pénznem, árfolyam, egység, dátum, összeg, hiány oka, kimaradás oka) és egy revíziószámot. A mentés és a jelölés levétele nullázza az átváltást, és növeli a revíziót;
+  - kimutatás: csak a még át nem váltott vagy árfolyam nélkül maradt számlákat váltjuk át, egy kötegben, zár alatt. Az eredményt csak akkor mentjük, ha a revízió nem változott közben. A havi bontás, a partnerösszesítő és a lefedettség `GROUP BY` lekérdezés. A kimaradó számlák naplózása a tárolt előző okhoz hasonlít; a memóriabeli állapot megszűnt;
+  - API: `GET /api/invoices?group=&offset=&limit=` (legfeljebb 200 sor), csoportonkénti elemszámmal. A `GET /api/report` már nem tartalmazza a teljes listát, csak a kimaradó számlákat (legfeljebb 500-at) és a számukat;
+  - felület: szerveroldali csoportszűrés, Előző/Következő lapozó (oldalanként 50 számla); a „Hibás fájlok” lista a kimutatás kimaradó számláiból dolgozik;
+  - tesztek: az átváltás nem ismétlődik; újramentés, jelölés levétele és pénznemváltás esetén újra átváltunk; elavult revízióra nem írunk; lapozás és csoportszűrés; az API paraméter-ellenőrzése.
+- **AI-tévedés:** az új végpontfájl megírásakor az AI a régit előbb törölte, mint hogy elolvasta volna; a tartalmát a gitből állította vissza és vetette össze.
+
+### Jövőbeli teljesítésű számlák a „Hibás fájlok” listában
+- **Kérés:** a jövőben esedékes számlák ne szerepeljenek a hibás fájlok között.
+- **Eredmény:** a kimutatás kimaradó számláinak lekérdezése kihagyja a `future_performance` okúakat (a listából és a darabszámból is). Ezek továbbra is kimaradnak a diagramból és az összesítőből, és a számlalista „Jövőbeli teljesítésű számlák” csoportjában, valamint a lefedettségi megjegyzésben látszanak. A tesztet és a README-t frissítettük; Dockerben az 5 jövőbeli tesztszámla mellett a hibás fájlok száma 0.
+
+### Felület egyszerűsítése: jövőbeli számlák, lefedettség, összegzés
+- **Kérés:** a jövőbeli számlák Bruttó (HUF) cellájában elég a „–”; az Állapot oszlopban nem kell a „feldolgozáskor a jövőben volt” szöveg; a diagram és az összesítő alatt csak a „Tartalmazza: … számla” sor maradjon; a számlalista alatti „Összesen …: … rendben, … ellenőrzendő” szöveg sem kell.
+- **Eredmény:** a jövőbeli számla összegcellája üres jelet kap megjegyzés nélkül; az Állapot oszlop az `info` szintű jelöléseket csak címkeként mutatja; a lefedettség egy sorra rövidült; a lista alatti összegzés megszűnt (az üres lista és az üres csoport üzenete maradt). A nem használt nyelvi kulcsokat töröltük, a README-t frissítettük. Dockerben headless böngészővel ellenőriztük a megjelenítést.
+- **Utána:** a diagram címe „Havi cash-flow (fizetési határidő szerint, HUF)” helyett „Bruttó havi kimutatás, fizetési határidő szerint” lett; a pénznem az y tengely feliratán marad.
