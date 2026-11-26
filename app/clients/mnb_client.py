@@ -32,6 +32,7 @@ class MnbError(AppError):
 class MnbRejectedError(MnbError):
     """Az MNB érdemben elutasította a kérést (SOAP-hiba, 4xx, érvénytelen devizakód); újrapróbálni nem érdemes."""
 
+    code = "mnb_rejected"
 
 class MnbNoRateError(MnbRejectedError):
     code = "mnb_no_rate"
