@@ -20,6 +20,9 @@ _RELATIVE_TOLERANCE = Decimal("0.0005")
 _RATE_ROUNDING = Decimal("0.5")  # tételenkénti és egész pénznemre kerekítés
 _PERCENT = re.compile(r"(?<![\d.,])(\d{1,2}(?:[.,]\d{1,2})?)\s?%")
 
+# A teljesítés napja a feldolgozáskor a jövőben van: még nincs hozzá MNB-árfolyam, a számla kimarad a kimutatásból.
+FUTURE_PERFORMANCE = "future_performance"
+
 
 class InvoiceStatus(StrEnum):
     OK = "ok"
@@ -30,6 +33,7 @@ class InvoiceStatus(StrEnum):
 class Severity(StrEnum):
     ERROR = "error"
     WARNING = "warning"
+    INFO = "info"  # tárolt jelölés, nem teszi ellenőrzendővé a számlát
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,6 +61,7 @@ def validate_invoice(
 ) -> ValidationResult:
     """Hibák (érvénytelen érték) → INVALID; gyanús értékek → NEEDS_REVIEW; különben OK.
 
+    A jövőbeli teljesítés `INFO` jelölést kap, ami a státuszt nem befolyásolja.
     A kötelező mezők meglétét a hívó (`InvoiceAnalyzer`) a validáció előtt ellenőrzi.
     """
     issues: list[Issue] = []
@@ -74,7 +79,10 @@ def validate_invoice(
     if source_text is not None:
         _check_vat_rate(fields, source_text, warning)
         _check_line_items(fields, source_text, warning)
-    _check_dates(fields, warning, today or date.today())
+    today = today or date.today()
+    _check_dates(fields, warning, today)
+    if fields.performance_date and fields.performance_date > today:
+        issues.append(Issue(FUTURE_PERFORMANCE, "performance_date", Severity.INFO))
 
     if _same_party(fields):
         warning("same_party")
@@ -83,7 +91,7 @@ def validate_invoice(
 
     if any(issue.severity is Severity.ERROR for issue in issues):
         status = InvoiceStatus.INVALID
-    elif issues:
+    elif any(issue.severity is Severity.WARNING for issue in issues):
         status = InvoiceStatus.NEEDS_REVIEW
     else:
         status = InvoiceStatus.OK

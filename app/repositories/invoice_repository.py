@@ -57,6 +57,9 @@ class InvoiceRecord:
     issues: tuple[dict, ...]
     content_hash: str = ""
 
+    def has_issue(self, code: str) -> bool:
+        return any(issue.get("code") == code for issue in self.issues)
+
 
 def _to_record(row: InvoiceRow) -> InvoiceRecord:
     return InvoiceRecord(
@@ -92,6 +95,23 @@ class InvoiceRepository:
         async with self._db.session() as session:
             found = await session.scalar(select(InvoiceRow.id).where(InvoiceRow.content_hash == content_hash))
         return found is not None
+
+    async def find(self, content_hash: str) -> InvoiceRecord | None:
+        async with self._db.session() as session:
+            row = await session.scalar(select(InvoiceRow).where(InvoiceRow.content_hash == content_hash))
+            return _to_record(row) if row is not None else None
+
+    async def remove_issue(self, content_hash: str, code: str) -> bool:
+        """Leveszi a tárolt számla adott kódú jelölését; igaz, ha volt mit levenni."""
+        async with self._db.transaction(immediate=True) as session:
+            row = await session.scalar(select(InvoiceRow).where(InvoiceRow.content_hash == content_hash))
+            if row is None:
+                return False
+            kept = [issue for issue in row.issues if issue.get("code") != code]
+            if len(kept) == len(row.issues):
+                return False
+            row.issues = kept
+        return True
 
     async def save(
         self,

@@ -1,12 +1,14 @@
 import asyncio
 import hashlib
 import logging
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
+from datetime import date
 from enum import StrEnum
 from pathlib import PurePath
 
-from app.repositories.invoice_repository import InvoiceRepository
+from app.extraction.validation import FUTURE_PERFORMANCE
+from app.repositories.invoice_repository import InvoiceRecord, InvoiceRepository
 from app.services.job_service import AddOutcome, JobTracker
 from app.services.processing_service import DocumentProcessor
 
@@ -23,6 +25,7 @@ class UploadOutcome(StrEnum):
     ACCEPTED = "accepted"
     DUPLICATE = "duplicate"
     REJECTED = "rejected"
+    UPDATED = "updated"
 
 
 @dataclass(frozen=True)
@@ -42,6 +45,9 @@ class UploadService:
     """Fogadja a feltöltött fájlokat: duplikáció-szűrés, majd a feldolgozás sorba állítása.
 
     A PDF-et nem tároljuk: csak a tartalom hash-e és a megjelenítési fájlnév marad meg a kinyert adat mellett.
+
+    Már tárolt tartalomnál nincs új feldolgozás (LLM-hívás sem); ha a számla jövőbeli teljesítés miatt maradt ki
+    a kimutatásból, és a teljesítés napja azóta elérkezett, a jelölés lekerül (`UPDATED`).
     """
 
     def __init__(
@@ -50,11 +56,14 @@ class UploadService:
         invoices: InvoiceRepository,
         processor: DocumentProcessor,
         max_bytes: int,
+        *,
+        today: Callable[[], date] = date.today,
     ) -> None:
         self._jobs = jobs
         self._invoices = invoices
         self._processor = processor
         self._max_bytes = max_bytes
+        self._today = today
 
     def _reject(
         self, name: str, size: int, code: str, upload_id: str | None, content_hash: str | None = None
@@ -80,8 +89,11 @@ class UploadService:
         if outcome is AddOutcome.DUPLICATE:
             return self._duplicate(name, len(data), upload_id, content_hash, job.id)
         try:
-            if await self._invoices.exists(content_hash):
+            stored = await self._invoices.find(content_hash)
+            if stored is not None:
                 self._jobs.finish(job.id)
+                if await self._reevaluate(stored):
+                    return UploadResult(name, UploadOutcome.UPDATED)
                 return self._duplicate(name, len(data), upload_id, content_hash)
             # Tele sornál itt vár; így a kérés válasza, és vele a böngésző következő csomagja is késik.
             await self._processor.enqueue(job.id, data)
@@ -94,6 +106,15 @@ class UploadService:
             self._jobs.finish(job.id)
             return self._reject(name, len(data), "unexpected_error", upload_id, content_hash)
         return UploadResult(name, UploadOutcome.ACCEPTED, job.id)
+
+    async def _reevaluate(self, stored: InvoiceRecord) -> bool:
+        """A tárolt adatokból: ha a jövőbeli teljesítés napja már elérkezett, a jelölés lekerül."""
+        if not stored.has_issue(FUTURE_PERFORMANCE) or stored.fields.performance_date > self._today():
+            return False
+        removed = await self._invoices.remove_issue(stored.content_hash, FUTURE_PERFORMANCE)
+        if removed:
+            logger.info("future performance flag cleared", extra={"invoice_id": stored.id})
+        return removed
 
     async def ingest_many(
         self, files: Iterable[tuple[str, bytes]], upload_id: str | None = None

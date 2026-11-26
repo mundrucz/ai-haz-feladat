@@ -9,6 +9,7 @@
   "ui.upload.button": "Fájlok kiválasztása",
   "ui.upload.progress": "Feltöltés: {done} / {total}",
   "ui.upload.summary": "Sikeresen feltöltve: {accepted} db, hibás: {rejected} db, duplikátum: {duplicate} db.",
+  "ui.upload.updated": "Újraértékelve: {updated} korábban jövőbeli teljesítésű számla bekerült a kimutatásba.",
   "ui.upload.failed": "A feltöltés nem sikerült. Ellenőrizd a kapcsolatot, és próbáld újra.",
   "ui.upload.stop": "Feltöltés leállítása",
   "ui.upload.stopping": "Leállítás… a már elküldött csomag még befejeződik.",
@@ -118,6 +119,7 @@
   "ui.issue.date_out_of_range": "Valószínűtlen dátum: {field}.",
   "ui.issue.due_before_issue": "A fizetési határidő a kiállítás előtt van.",
   "ui.issue.performance_after_due": "A teljesítés a fizetési határidő után van.",
+  "ui.issue.future_performance": "A teljesítés dátuma a feldolgozáskor a jövőben volt.",
 
   "status.pending": "Sorban áll",
   "status.processing": "Feldolgozás alatt",
@@ -126,6 +128,7 @@
   "outcome.accepted": "Feltöltve",
   "outcome.duplicate": "Már korábban feltöltött",
   "outcome.rejected": "Elutasítva",
+  "outcome.updated": "Újraértékelve",
 
   "error.internal": "Váratlan hiba történt. A művelet nem sikerült, az alkalmazás tovább működik.",
   "error.not_a_pdf": "A fájl nem PDF dokumentum.",

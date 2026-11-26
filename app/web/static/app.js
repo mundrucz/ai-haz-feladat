@@ -513,7 +513,7 @@
     stopButton.hidden = false;
     uploadWarning.hidden = false;
     const uploadId = newUploadId();
-    const tally = { accepted: 0, duplicate: 0, rejected: 0 };
+    const tally = { accepted: 0, duplicate: 0, rejected: 0, updated: 0 };
     let done = 0;
     let failed = false;
     await clearFailed();
@@ -546,6 +546,7 @@
     uploadWarning.hidden = true;
     uploadStatus.textContent = [
       t("ui.upload.summary", tally),
+      tally.updated ? t("ui.upload.updated", tally) : "",
       stopped ? t("ui.upload.stopped", { stopped }) : "",
       failed ? t("ui.upload.failed") : "",
     ]

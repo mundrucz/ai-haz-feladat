@@ -256,6 +256,25 @@ async def test_invoice_without_performance_date_is_rejected_and_not_stored(invoi
     assert await invoices.list_all() == []
 
 
+async def test_future_performance_is_stored_with_a_flag_but_not_for_review(invoices):
+    analyzer = InvoiceAnalyzer(_Fixed(), invoices, COMPANY, today=lambda: date(2026, 1, 10))
+
+    await analyzer.analyze("h1", "x.pdf", "Nordwind Solutions Kft.")
+
+    (record,) = await invoices.list_all()
+    assert record.status == "ok"
+    assert {"code": "future_performance", "field": "performance_date", "severity": "info"} in record.issues
+
+
+async def test_performance_on_the_processing_day_is_not_flagged(invoices):
+    analyzer = InvoiceAnalyzer(_Fixed(), invoices, COMPANY, today=lambda: date(2026, 1, 11))
+
+    await analyzer.analyze("h1", "x.pdf", "Nordwind Solutions Kft.")
+
+    (record,) = await invoices.list_all()
+    assert not record.has_issue("future_performance")
+
+
 _UNRECOGNISED_US = dict(seller_name="Nordwind Solutions Ltd.", seller_tax_id="HU 26481937 / 2-43")
 
 
