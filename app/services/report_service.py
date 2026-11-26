@@ -15,10 +15,7 @@ from app.services.rate_service import RateService, convert
 
 logger = logging.getLogger(__name__)
 
-PROBLEM_NO_AMOUNT = "missing_amount"
-PROBLEM_NO_RATE_DATE = "missing_rate_date"
 PROBLEM_NO_DIRECTION = "no_direction"
-PROBLEM_NO_DUE_DATE = "missing_due_date"
 
 _HU_PREFIX = "HU"
 _HU_TAX_NUMBER_LENGTH = 11
@@ -33,22 +30,18 @@ class ConvertedInvoice:
     problem: str | None
 
     @property
-    def in_partner_totals(self) -> bool:
+    def in_totals(self) -> bool:
         return self.amount is not None and self.record.direction is not None
 
-    @property
-    def in_cash_flow(self) -> bool:
-        return self.in_partner_totals and self.record.fields.due_date is not None
 
-
-def partner_key(tax_id: str | None, name: str | None) -> str | None:
-    """Ugyanazt a partnert azonosító kulcs: adószám (országelőtag és csoportazonosító nélkül), tartaléknak a név."""
+def partner_key(tax_id: str | None) -> str | None:
+    """Ugyanazt a partnert azonosító kulcs: a normalizált adószám, országelőtag és csoportazonosító nélkül."""
     key = normalize_key(tax_id)
     if key.startswith(_HU_PREFIX) and key[len(_HU_PREFIX) :].isdigit():
         key = key[len(_HU_PREFIX) :]
     if key.isdigit() and len(key) == _HU_TAX_NUMBER_LENGTH:
         key = key[:_HU_TAX_BASE_LENGTH]
-    return key or normalize_key(name) or None
+    return key or None
 
 
 def rate_date(record: InvoiceRecord) -> date | None:
@@ -70,7 +63,7 @@ def monthly_series(items: list[ConvertedInvoice]) -> list[dict]:
     """Havi bejövő/kimenő összeg a fizetési határidő szerint; a hónapok között nincs kihagyás."""
     totals: dict[str, dict[Direction, Decimal]] = defaultdict(lambda: defaultdict(Decimal))
     for item in items:
-        if item.in_cash_flow:
+        if item.in_totals:
             due = item.record.fields.due_date
             totals[f"{due.year:04d}-{due.month:02d}"][item.record.direction] += item.amount
     if not totals:
@@ -89,8 +82,8 @@ def partner_summary(items: list[ConvertedInvoice]) -> dict:
     """Cégenkénti bejövő/kimenő összesítés, a végén az összes partner összegével."""
     groups: dict[str, list[ConvertedInvoice]] = defaultdict(list)
     for item in items:
-        if item.in_partner_totals:
-            key = partner_key(item.record.partner_tax_id, item.record.partner_name)
+        if item.in_totals:
+            key = partner_key(item.record.partner_tax_id)
             groups[key or f"#{item.record.id}"].append(item)
     partners = []
     for group in groups.values():
@@ -162,7 +155,7 @@ class ReportService:
         needs: dict[str, tuple[date, date]] = {}
         for record in records:
             day, currency = rate_date(record), record.fields.currency
-            if day is None or not currency or record.fields.gross_total is None or currency == self._report_currency:
+            if currency == self._report_currency:
                 continue
             first, last = needs.get(currency, (day, day))
             needs[currency] = (min(first, day), max(last, day))
@@ -170,29 +163,25 @@ class ReportService:
 
     async def _convert(self, record: InvoiceRecord, failures: dict[str, AppError]) -> ConvertedInvoice:
         fields = record.fields
-        if fields.gross_total is None or not fields.currency:
-            return ConvertedInvoice(record, None, None, PROBLEM_NO_AMOUNT)
         if fields.currency == self._report_currency:
             amount = fields.gross_total.quantize(Decimal(1), rounding=ROUND_HALF_UP)
             return ConvertedInvoice(record, None, amount, self._side_problem(record))
         day = rate_date(record)
-        if day is None:
-            return ConvertedInvoice(record, None, None, PROBLEM_NO_RATE_DATE)
         if fields.currency in failures:
-            return ConvertedInvoice(record, None, None, failures[fields.currency].code)
-        try:
-            quote = await self._rates.rate_on(fields.currency, day)
-        except AppError as exc:
-            return ConvertedInvoice(record, None, None, exc.code)
+            # A sikertelen lekérés csak azt a számlát érinti, amelynek az árfolyama nincs biztosan tárolva.
+            quote = await self._rates.stored_rate_on(fields.currency, day)
+            if quote is None:
+                return ConvertedInvoice(record, None, None, failures[fields.currency].code)
+        else:
+            try:
+                quote = await self._rates.rate_on(fields.currency, day)
+            except AppError as exc:
+                return ConvertedInvoice(record, None, None, exc.code)
         return ConvertedInvoice(record, quote, convert(fields.gross_total, quote), self._side_problem(record))
 
     @staticmethod
     def _side_problem(record: InvoiceRecord) -> str | None:
-        if record.direction is None:
-            return PROBLEM_NO_DIRECTION
-        if record.fields.due_date is None:
-            return PROBLEM_NO_DUE_DATE
-        return None
+        return PROBLEM_NO_DIRECTION if record.direction is None else None
 
     async def build(self) -> dict:
         items = await self.convert_all()
