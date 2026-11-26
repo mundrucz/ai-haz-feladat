@@ -79,7 +79,7 @@ Számlafeldolgozó webalkalmazás: PDF számlák feltöltése, adatkinyerés, MN
 ## Hibakezelés
 
 - Cél: **semmilyen bemenet vagy külső hiba nem állíthatja le az alkalmazást**; a hiba az érintett fájlnál/számlánál jelenik meg érthető okkal, a többi feldolgozás folytatódik.
-- Feldolgozási állapotok fájlonként/számlánként: sorban/feldolgozás alatt, kész (`ok`), ellenőrzendő (`needs_review`, gyanús érték, tárolva), hibás (ok kóddal és üzenettel, nem tárolva). A hibás fájl újrafeltöltéssel próbálható újra.
+- Feldolgozási állapotok fájlonként/számlánként: sorban/feldolgozás alatt, kész (`ok`), ellenőrzendő (`needs_review`, gyanús érték, tárolva, de a diagramba és az összesítőbe nem kerül), hibás (ok kóddal és üzenettel, nem tárolva). A hibás fájl újrafeltöltéssel próbálható újra.
 - Számba veendő hibaokok: nem PDF vagy sérült/jelszavas/üres/szkennelt PDF; túl nagy fájl; nem számla; hiányzó vagy ellentmondó mező; ismeretlen nyelv/formátum; dátum- és számformátum-hiba; ismeretlen pénznem; LLM nem elérhető, időtúllépés, rate limit, kvóta, érvénytelen kulcs, nem JSON vagy sémának nem megfelelő válasz; MNB nem elérhető/időtúllépés/hibás XML, hiányzó árfolyam; adatbázis-zárolás vagy ütközés; párhuzamosság okozta versenyhelyzet; lemez/hely hiánya.
 - Külső hívásoknál időtúllépés, korlátozott újrapróbálás exponenciális visszavárással (átmeneti hibákra), és érthető hibatípus; végleges hibát nem próbálunk újra.
 - Saját kivételhierarchia (domain-hibák), a határokon (API, háttérfeladat) elkapva és naplózva; csupasz `except:` és elnyelt hiba tilos. Strukturált naplózás (fájl/számla azonosítóval), titkok nélkül.

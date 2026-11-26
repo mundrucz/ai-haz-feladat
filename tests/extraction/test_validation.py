@@ -143,13 +143,28 @@ def test_net_exceeds_gross():
     assert ("net_exceeds_gross", "net_total") in codes(result)
 
 
-def test_non_positive_total_needs_review():
-    fields = replace(
+def test_storno_with_negative_totals_is_ok():
+    storno = replace(
         GOOD, net_total=Decimal("-1000.00"), vat_total=Decimal("-270.00"), gross_total=Decimal("-1270.00")
     )
+    text = "Nettó összesen -1 000,00 EUR\nÁFA összesen (27%) -270,00 EUR\nFizetendő -1 270,00 EUR"
+    result = validate(storno, source_text=text)
+    assert result.status is InvoiceStatus.OK
+    assert result.issues == ()
+
+
+def test_storno_checks_use_the_negated_amounts():
+    storno = replace(GOOD, net_total=Decimal("-2000.00"), vat_total=None, gross_total=Decimal("-1270.00"))
+    assert codes(validate(storno)) == {("net_exceeds_gross", "net_total")}
+    wrong_vat = replace(GOOD, net_total=Decimal("-1000.00"), vat_total=Decimal("-190.00"), gross_total=Decimal("-1190.00"))
+    assert codes(validate(wrong_vat, source_text="ÁFA (27%) -190,00")) == {("vat_rate_mismatch", "vat_total")}
+
+
+def test_zero_total_needs_review():
+    fields = replace(GOOD, net_total=Decimal("0.00"), vat_total=Decimal("0.00"), gross_total=Decimal("0.00"))
     result = validate(fields)
     assert result.status is InvoiceStatus.NEEDS_REVIEW
-    assert codes(result) == {("non_positive_total", "gross_total")}
+    assert codes(result) == {("zero_total", "gross_total")}
 
 
 def test_date_consistency():

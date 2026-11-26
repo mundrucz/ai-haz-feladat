@@ -2,13 +2,16 @@
 
 import logging
 from collections import Counter, defaultdict
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date
 from decimal import ROUND_HALF_UP, Decimal
+from enum import StrEnum
 
 from app.clients.mnb_client import RateQuote
 from app.core.errors import AppError
 from app.extraction.normalize import normalize_key
+from app.extraction.validation import InvoiceStatus
 from app.repositories.invoice_repository import Direction, InvoiceRecord, InvoiceRepository
 from app.services.failed_file_service import SOURCE_REPORT, FailedFileLog
 from app.services.rate_service import RateService, convert
@@ -22,16 +25,44 @@ _HU_TAX_NUMBER_LENGTH = 11
 _HU_TAX_BASE_LENGTH = 8
 
 
+class Exclusion(StrEnum):
+    """Miért marad ki egy számla a diagramból és a cégenkénti összesítőből."""
+
+    NEEDS_REVIEW = "needs_review"
+    NO_RATE = "no_rate"
+    NO_DIRECTION = "no_direction"
+
+
 @dataclass(frozen=True, slots=True)
 class ConvertedInvoice:
     record: InvoiceRecord
     quote: RateQuote | None
     amount: Decimal | None
     problem: str | None
+    future: bool = False
+
+    @property
+    def storno(self) -> bool:
+        return self.record.fields.gross_total < 0
+
+    @property
+    def estimated(self) -> bool:
+        """A jövőbeli teljesítés a mai árfolyamon váltva: becslés, a teljesítés napján változhat."""
+        return self.future and self.quote is not None
+
+    @property
+    def exclusion(self) -> Exclusion | None:
+        if self.record.status == InvoiceStatus.NEEDS_REVIEW:
+            return Exclusion.NEEDS_REVIEW
+        if self.amount is None:
+            return Exclusion.NO_RATE
+        if self.record.direction is None:
+            return Exclusion.NO_DIRECTION
+        return None
 
     @property
     def in_totals(self) -> bool:
-        return self.amount is not None and self.record.direction is not None
+        return self.exclusion is None
 
 
 def partner_key(tax_id: str | None) -> str | None:
@@ -111,6 +142,28 @@ def _most_common(values) -> str | None:
     return counts.most_common(1)[0][0] if counts else None
 
 
+def coverage(items: list[ConvertedInvoice]) -> dict:
+    """Mit tartalmaz a diagram és az összesítő: a beszámított számlák (ebből sztornó, becsült árfolyamú) és a kimaradók oka szerint."""
+    included = [item for item in items if item.in_totals]
+    excluded = Counter(item.exclusion.value for item in items if item.exclusion)
+    return {
+        "included": len(included),
+        "storno": sum(item.storno for item in included),
+        "estimated": sum(item.estimated for item in included),
+        "excluded": {reason.value: excluded.get(reason.value, 0) for reason in Exclusion},
+    }
+
+
+def group_counts(items: list[ConvertedInvoice]) -> dict:
+    """A számlalista csoportjai: összes, sztornó, jövőbeli teljesítésű, ellenőrzendő."""
+    return {
+        "all": len(items),
+        "storno": sum(item.storno for item in items),
+        "future": sum(item.future for item in items),
+        "needs_review": sum(item.exclusion is Exclusion.NEEDS_REVIEW for item in items),
+    }
+
+
 class ReportService:
     def __init__(
         self,
@@ -118,11 +171,14 @@ class ReportService:
         rates: RateService,
         report_currency: str,
         failure_log: FailedFileLog | None = None,
+        *,
+        today: Callable[[], date] = date.today,
     ) -> None:
         self._repository = repository
         self._rates = rates
         self._report_currency = report_currency
         self._failure_log = failure_log or FailedFileLog()
+        self._today = today
         self._logged_problems: dict[int, str] = {}
 
     @property
@@ -132,7 +188,8 @@ class ReportService:
     async def convert_all(self) -> list[ConvertedInvoice]:
         records = await self._repository.list_all()
         failures = await self._rates.prepare(self._needs(records))
-        items = [await self._convert(record, failures) for record in records]
+        today = self._today()
+        items = [await self._convert(record, failures, today) for record in records]
         self._log_problems(items)
         return items
 
@@ -161,23 +218,26 @@ class ReportService:
             needs[currency] = (min(first, day), max(last, day))
         return needs
 
-    async def _convert(self, record: InvoiceRecord, failures: dict[str, AppError]) -> ConvertedInvoice:
+    async def _convert(self, record: InvoiceRecord, failures: dict[str, AppError], today: date) -> ConvertedInvoice:
         fields = record.fields
+        day = rate_date(record)
+        future = day > today
         if fields.currency == self._report_currency:
             amount = fields.gross_total.quantize(Decimal(1), rounding=ROUND_HALF_UP)
-            return ConvertedInvoice(record, None, amount, self._side_problem(record))
-        day = rate_date(record)
+            return ConvertedInvoice(record, None, amount, self._side_problem(record), future)
         if fields.currency in failures:
             # A sikertelen lekérés csak azt a számlát érinti, amelynek az árfolyama nincs biztosan tárolva.
             quote = await self._rates.stored_rate_on(fields.currency, day)
             if quote is None:
-                return ConvertedInvoice(record, None, None, failures[fields.currency].code)
+                return ConvertedInvoice(record, None, None, failures[fields.currency].code, future)
         else:
             try:
                 quote = await self._rates.rate_on(fields.currency, day)
             except AppError as exc:
-                return ConvertedInvoice(record, None, None, exc.code)
-        return ConvertedInvoice(record, quote, convert(fields.gross_total, quote), self._side_problem(record))
+                return ConvertedInvoice(record, None, None, exc.code, future)
+        return ConvertedInvoice(
+            record, quote, convert(fields.gross_total, quote), self._side_problem(record), future
+        )
 
     @staticmethod
     def _side_problem(record: InvoiceRecord) -> str | None:
@@ -189,6 +249,8 @@ class ReportService:
             "currency": self._report_currency,
             "months": monthly_series(items),
             **partner_summary(items),
+            "coverage": coverage(items),
+            "groups": group_counts(items),
             "invoices": [_invoice_row(item) for item in items],
         }
 
@@ -211,4 +273,8 @@ def _invoice_row(item: ConvertedInvoice) -> dict:
         "amount": int(item.amount) if item.amount is not None else None,
         "problem": item.problem,
         "status": record.status,
+        "storno": item.storno,
+        "future": item.future,
+        "estimated": item.estimated,
+        "excluded": item.exclusion.value if item.exclusion else None,
     }

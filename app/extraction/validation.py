@@ -94,9 +94,11 @@ def _check_totals(fields: InvoiceFields, warning) -> None:
     net, vat, gross = fields.net_total, fields.vat_total, fields.gross_total
     if gross is None:
         return
-    if gross <= 0:
-        warning("non_positive_total", "gross_total")
-    if net is not None and gross > 0 and net > gross:
+    # A negatív végösszeg (sztornó) szabályos; az ellenőrzések ilyenkor az ellentett értékekre vonatkoznak.
+    if gross == 0:
+        warning("zero_total", "gross_total")
+    sign = -1 if gross < 0 else 1
+    if net is not None and gross != 0 and net * sign > gross * sign:
         warning("net_exceeds_gross", "net_total")
     if net is not None and vat is not None:
         tolerance = _BASE_TOLERANCE + abs(gross) * _RELATIVE_TOLERANCE
@@ -107,6 +109,8 @@ def _check_totals(fields: InvoiceFields, warning) -> None:
 def _check_vat_rate(fields: InvoiceFields, text: str, warning) -> None:
     """Az ÁFA összege a számlán szereplő ÁFA-kulcs(ok) és a nettó alapján megfelel-e."""
     net, vat = fields.net_total, fields.vat_total
+    if net is not None and vat is not None and net < 0:
+        net, vat = -net, -vat
     if net is None or vat is None or net <= 0 or vat < 0:
         return
     rates = _stated_vat_rates(text)

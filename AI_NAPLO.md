@@ -237,3 +237,19 @@ A fejlesztő kérései, egyenként megvalósítva:
 - **Kérés:** „Mit jelent az `llm_*` hiba?”, majd: „Ne az ismert korlátoknál, hanem legyen egy szekció a hibakódokról a README-ben.”
   - **Eredmény:** új „Hibakódok” szakasz a README-ben: fájlhibák, ellenőrzendő jelölések, árfolyamhibák, API- és indítási hibák, kódonként egy sorral. A korábbi szétszórt felsorolások (Hibakezelés, LLM-modell, Ismert korlátok) erre hivatkoznak.
   - **AI tévedése:** az első változat szerint minden árfolyamhiba magától megszűnik a következő frissítéskor. A kódból kiderült, hogy a jegyzés nélküli napokat megjegyezzük, ezért ez csak a `mnb_unavailable`-ra és a `mnb_rate_not_yet`-re igaz. Javítva.
+
+### Sztornó, jövőbeli és ellenőrzendő számlák a kimutatásban
+- **Kérés:** a sztornó számla kerüljön a kimutatásba. A jövőbeli számla is kerüljön be mai árfolyamon, és a felület jelezze, hogy ez nem pontos mert mai árfolyammal kalkuláltunk. A diagramnál és az összesítőnél látszódjon, mit tartalmaz a kimutatás és mit nem. A számlalista legyen csoportonként szűrhető (összes, sztornó, jövőbeli, ellenőrzendő); az ellenőrzendők ne kerüljenek a kimutatásba. A továbbfejlesztési ötletekbe kerüljön be az állítható kimutatás-tartalom.
+- **Az AI kérdései és a döntések:**
+  - az előlegszámla (`due_before_issue`) ellenőrzendő marad, így kimarad a kimutatásból (felhasználói döntés);
+  - a „jövőbeli” a teljesítés dátumára vonatkozik, mert az árfolyam napja ez (felhasználói döntés);
+  - a sztornót a negatív bruttó jelzi; számlatípus-mezőt nem vezettünk be (AI javaslata, elfogadva).
+- **Eredmény:**
+  - validáció: a `non_positive_total` helyett csak a nulla végösszeg gyanús (`zero_total`); a nettó–bruttó és az ÁFA-kulcs ellenőrzése negatív összegnél az ellentett értékekkel fut;
+  - adatmigráció (`0002`): a korábban `non_positive_total`-lal tárolt sztornók elveszítik a jelölést, és ha más nem maradt, `ok` állapotba kerülnek;
+  - árfolyam: a jövőbeli nap a mai napra szorul, így bármilyen távoli teljesítés a legutóbbi jegyzést kapja; a `mnb_rate_not_yet` hibakód megszűnt;
+  - kimutatás: az ellenőrzendő számla átváltódik és látszik a listában, de kimarad a diagramból és az összesítőből. A `/api/report` új `coverage` (benne lévők, sztornók, becsültek, kimaradások okonként) és `groups` (csoportok darabszáma) mezőt ad;
+  - felület: a diagram és az összesítő alatt lefedettségi sorok és figyelmeztetés a becsült árfolyamra; a számlalistában csoportszűrő gombok, „Sztornó” és „Becsült árfolyam” címke, megjegyzés az ellenőrzendő sorokon. A diagram görbéje monoton simítást kapott, mert a negatív sztornó mellett a korábbi simítás 0 alá lógott;
+  - tesztek: sztornó-, nulla- és jövőbeli esetek, a migráció a régi jelölésű sorokon; kipróbálva Dockerben szintetikus számlákkal.
+- **AI tévedése:** a korábbi `test_future_dates_are_not_requested` a régi szabályt rögzítette, és a célzott futtatáskor bukott el. Átírva az új szabályra (csak a mai napig kérünk).
+- **AI tévedése:** a felület kipróbálásához beszúrt próbaszámla jelöléseit egyszerű szövegként írta az adatbázisba (`{code, field}` objektum helyett), így a lista üres maradt. A headless böngészős képernyőkép hozta ki; az adatot javította, az alkalmazás kódja jó volt.

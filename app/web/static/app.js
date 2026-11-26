@@ -37,6 +37,9 @@
   const partnersBody = partnersTable.querySelector("tbody");
   const partnersHead = partnersTable.querySelector("thead");
   const amountHeader = document.getElementById("amount-header");
+  const coverageBoxes = document.querySelectorAll("[data-coverage]");
+  const groupButtons = document.querySelectorAll("#inv-groups [data-group]");
+  const groupNote = document.getElementById("inv-group-note");
 
   const ACTIVE = new Set(["pending", "processing"]);
   let pollTimer = null;
@@ -45,6 +48,8 @@
   let deleting = false;
   let processingActive = false;
   let invoiceCount = 0;
+  let currentGroup = "all";
+  let lastInvoices = null;
 
   // Törölni csak akkor lehet, ha van mit, és nincs folyamatban feltöltés vagy feldolgozás.
   function updateDeleteButton() {
@@ -173,10 +178,17 @@
     return box;
   }
 
-  function statusCell(invoice) {
+  function statusCell(invoice, money) {
     const box = document.createElement("span");
     box.className = `inv-${invoice.status}`;
     box.textContent = t(`ui.inv.status.${invoice.status}`);
+    const tags = [money?.storno && "storno", money?.estimated && "estimated"].filter(Boolean);
+    tags.forEach((name) => {
+      const tag = document.createElement("span");
+      tag.className = "tag";
+      tag.textContent = t(`ui.inv.tag.${name}`);
+      box.append(" ", tag);
+    });
     if (invoice.issues.length) {
       const list = document.createElement("ul");
       list.className = "notes";
@@ -190,14 +202,37 @@
     return box;
   }
 
+  // A csoportok a kimutatás besorolását követik; a kimutatás nélkül csak az állapot és az előjel ismert.
+  const GROUP_TESTS = {
+    all: () => true,
+    storno: (invoice, money) => money?.storno ?? (invoice.gross_total ?? "").startsWith("-"),
+    future: (invoice, money) => Boolean(money?.future),
+    needs_review: (invoice) => invoice.status === "needs_review",
+  };
+
+  function renderGroups(invoices, converted) {
+    groupButtons.forEach((button) => {
+      const group = button.dataset.group;
+      const count = invoices.filter((invoice) => GROUP_TESTS[group](invoice, converted.get(invoice.id))).length;
+      button.textContent = t(`ui.inv.group.${group}`, { count });
+      button.setAttribute("aria-pressed", String(group === currentGroup));
+    });
+    const note = strings[`ui.inv.group_note.${currentGroup}`];
+    groupNote.textContent = note ?? "";
+    groupNote.hidden = !note;
+  }
+
   function renderInvoices(data, report) {
+    lastInvoices = { data, report };
     const { invoices, counts } = data;
     invoiceCount = invoices.length;
     updateDeleteButton();
     const converted = new Map((report?.invoices ?? []).map((item) => [item.id, item]));
-    invTable.hidden = invoices.length === 0;
+    renderGroups(invoices, converted);
+    const shown = invoices.filter((invoice) => GROUP_TESTS[currentGroup](invoice, converted.get(invoice.id)));
+    invTable.hidden = shown.length === 0;
     invBody.replaceChildren(
-      ...invoices.map((invoice) => {
+      ...shown.map((invoice) => {
         const row = document.createElement("tr");
         cell(row, invoice.invoice_number);
         cell(row, party(invoice.seller));
@@ -215,18 +250,20 @@
         cell(row, amountCell(money), "num");
         cell(row, invoice.direction ? t(`ui.inv.direction.${invoice.direction}`) : t("ui.inv.direction.unknown"));
         cell(row, party(invoice.partner));
-        cell(row, statusCell(invoice));
+        cell(row, statusCell(invoice, money));
         return row;
       }),
     );
     limitHeight(invWrap, invBody, VISIBLE_INVOICE_ROWS);
-    invSummary.textContent = invoices.length
-      ? t("ui.inv.summary", {
-          total: invoices.length,
-          ok: counts.ok,
-          review: counts.needs_review,
-        })
-      : t("ui.inv.empty");
+    invSummary.textContent = !invoices.length
+      ? t("ui.inv.empty")
+      : shown.length
+        ? t("ui.inv.summary", {
+            total: invoices.length,
+            ok: counts.ok,
+            review: counts.needs_review,
+          })
+        : t("ui.inv.group_empty");
   }
 
   // A sorok magassága változó (megjegyzések, adószám), ezért az utolsó látható sor aljáig mért magasságra korlátozunk;
@@ -252,13 +289,47 @@
     if (!money) return null;
     const box = document.createElement("span");
     box.textContent = money.amount === null ? t("ui.inv.missing") : formatAmount(String(money.amount));
-    if (money.problem) {
+    const notes = [
+      money.estimated && ["estimated", t("ui.inv.estimated_note")],
+      money.problem && ["problem", strings[`ui.problem.${money.problem}`] ?? money.problem],
+      !money.problem && money.excluded === "needs_review" && ["problem", t("ui.inv.review_note")],
+    ].filter(Boolean);
+    notes.forEach(([className, text]) => {
       const note = document.createElement("small");
-      note.className = "problem";
-      note.textContent = strings[`ui.problem.${money.problem}`] ?? money.problem;
+      note.className = className;
+      note.textContent = text;
       box.appendChild(note);
-    }
+    });
     return box;
+  }
+
+  // A diagram és az összesítő alatt: mely számlák vannak benne, melyek maradtak ki és miért.
+  function renderCoverage(report) {
+    const { coverage } = report;
+    const lines = [[t("ui.report.coverage.included", { count: coverage.included }), "muted"]];
+    if (coverage.storno) lines.push([t("ui.report.coverage.storno", { count: coverage.storno }), "muted"]);
+    if (coverage.estimated) lines.push([t("ui.report.coverage.estimated", { count: coverage.estimated }), "warning"]);
+    const excluded = Object.entries(coverage.excluded)
+      .filter(([, count]) => count > 0)
+      .map(([reason, count]) => t(`ui.report.coverage.excluded.${reason}`, { count }));
+    lines.push([
+      excluded.length
+        ? t("ui.report.coverage.excluded", { items: excluded.join(", ") })
+        : t("ui.report.coverage.nothing_excluded"),
+      "muted",
+    ]);
+    const hasInvoices = report.invoices.length > 0;
+    coverageBoxes.forEach((box) => {
+      box.hidden = !hasInvoices;
+      box.replaceChildren(
+        ...lines.map(([text, className]) => {
+          const line = document.createElement("p");
+          line.className = className;
+          line.textContent = text;
+          return line;
+        }),
+      );
+    });
   }
 
   // Oszlopok a partnercégek, sorok az Össz bejövő és az Össz kimenő; az utolsó oszlop az összes partner összege.
@@ -314,7 +385,7 @@
     const datasets = [
       { label: t("ui.report.incoming"), data: months.map((entry) => entry.incoming), borderColor: "#067647", backgroundColor: "#067647" },
       { label: t("ui.report.outgoing"), data: months.map((entry) => entry.outgoing), borderColor: "#b42318", backgroundColor: "#b42318" },
-    ].map((dataset) => ({ ...dataset, tension: 0.2, pointRadius: 4 }));
+    ].map((dataset) => ({ ...dataset, cubicInterpolationMode: "monotone", pointRadius: 4 }));
     if (chart) {
       chart.data.labels = labels;
       chart.data.datasets = datasets;
@@ -352,10 +423,11 @@
         lastReport = report;
         renderProblems();
       }
-      if (invoicesResponse.ok) renderInvoices(await invoicesResponse.json(), report);
+      if (invoicesResponse.ok) renderInvoices(await invoicesResponse.json(), report ?? lastReport);
       if (report) {
         renderChart(report);
         renderPartners(report);
+        renderCoverage(report);
       }
     } catch (error) {
       // A következő frissítés újra próbálkozik.
@@ -492,6 +564,12 @@
 
   pickButton.addEventListener("click", () => input.click());
   deleteButton.addEventListener("click", deleteInvoices);
+  groupButtons.forEach((button) =>
+    button.addEventListener("click", () => {
+      currentGroup = button.dataset.group;
+      if (lastInvoices) renderInvoices(lastInvoices.data, lastInvoices.report);
+    }),
+  );
   stopButton.addEventListener("click", () => {
     stopRequested = true;
     stopButton.disabled = true;

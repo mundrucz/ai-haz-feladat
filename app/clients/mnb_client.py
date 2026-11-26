@@ -38,12 +38,6 @@ class MnbNoRateError(MnbRejectedError):
     code = "mnb_no_rate"
 
 
-class MnbRateNotYetError(MnbNoRateError):
-    """A nap olyan messze van a jövőben, hogy a visszatekintési ablakában még nem lehet jegyzés."""
-
-    code = "mnb_rate_not_yet"
-
-
 @dataclass(frozen=True, slots=True)
 class RateQuote:
     """`unit` egység `currency` ára forintban az adott napon."""
