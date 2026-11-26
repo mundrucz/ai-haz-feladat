@@ -67,6 +67,16 @@ class InvoiceRow(Base):
     # Kiállító adószáma + számlaszám (normalizálva): ugyanaz a számla más fájlból sem tárolható kétszer.
     identity_key: Mapped[str | None] = mapped_column(unique=True)
     created_at: Mapped[datetime] = mapped_column(server_default=func.current_timestamp())
+    # Minden módosításkor nő; a tárolt átváltás csak ahhoz a revízióhoz érvényes, amelyből készült.
+    revision: Mapped[int] = mapped_column(server_default="0")
+    # A kimutatás pénznemére váltás eredménye; NULL `report_currency`: még nincs átváltva (vagy elavult).
+    report_currency: Mapped[str | None] = mapped_column(index=True)
+    rate: Mapped[Decimal | None]
+    rate_unit: Mapped[int | None]
+    rate_date: Mapped[date | None]
+    report_amount: Mapped[int | None]
+    report_problem: Mapped[str | None]
+    report_exclusion: Mapped[str | None]
 
 
 class ExchangeRateRow(Base):
