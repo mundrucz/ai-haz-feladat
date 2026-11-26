@@ -57,7 +57,7 @@ class RateService:
         lookback_days: int = 31,
         max_request_days: int = 366,
         currencies_ttl_days: int = 7,
-        currencies_retry_seconds: float = 60.0,
+        retry_seconds: float = 3600.0,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._repository = repository
@@ -66,9 +66,11 @@ class RateService:
         self._lookback = timedelta(days=lookback_days)
         self._max_request = timedelta(days=max(1, max_request_days))
         self._currencies_ttl = timedelta(days=currencies_ttl_days)
-        self._currencies_retry = currencies_retry_seconds
+        self._retry = retry_seconds
         self._clock = clock
         self._currencies_failed_at: float | None = None
+        self._rates_failed_at: float | None = None
+        self._rates_error: AppError | None = None
         self._currencies_lock = asyncio.Lock()
         self._fetch_lock = asyncio.Lock()
 
@@ -87,7 +89,7 @@ class RateService:
             if self._fresh(stored):
                 return stored.codes
             fallback = stored.codes if stored else None
-            if self._currencies_failed_at is not None and self._clock() - self._currencies_failed_at < self._currencies_retry:
+            if self._recently(self._currencies_failed_at):
                 return fallback
             try:
                 codes = await self._source.fetch_currencies()
@@ -106,6 +108,9 @@ class RateService:
 
     def _fresh(self, stored: SupportedCurrencies | None) -> bool:
         return stored is not None and self._today() - stored.fetched_on < self._currencies_ttl
+
+    def _recently(self, failed_at: float | None) -> bool:
+        return failed_at is not None and self._clock() - failed_at < self._retry
 
     async def prepare(self, needs: Mapping[str, tuple[date, date]]) -> dict[str, AppError]:
         """Egyetlen kéréssel lekéri a hiányzó devizák hiányzó időszakát; a sikertelen devizák hibáit adja vissza."""
@@ -150,7 +155,20 @@ class RateService:
             raise MnbNoRateError(f"no MNB rate for {currency} on or before {day.isoformat()}")
         return quote
 
+    async def stored_rate_on(self, currency: str, day: date) -> RateQuote | None:
+        """A tárolt árfolyam, ha a jegyzés napjától `day`-ig minden nap le van kérve (így MNB nélkül is biztos)."""
+        earliest = day - self._lookback
+        quote = await self._repository.latest_on_or_before(currency, day, earliest)
+        start = quote.rate_date if quote else earliest
+        if missing_ranges(start, day, await self._repository.coverage(currency)):
+            return None
+        return quote
+
     async def _fetch(self, currencies: list[str], start: date, end: date, failures: dict[str, AppError]) -> None:
+        # Elérhetetlen MNB-t csak `retry_seconds` után próbálunk újra, addig a legutóbbi hibát adjuk vissza.
+        if self._rates_error is not None and self._recently(self._rates_failed_at):
+            self._record_failure(currencies, self._rates_error, failures)
+            return
         try:
             quotes = await self._source.fetch_rates(currencies, start, end)
         except MnbRejectedError as exc:
@@ -162,8 +180,10 @@ class RateService:
                 await self._fetch([currency], start, end, failures)
             return
         except AppError as exc:
+            self._rates_failed_at, self._rates_error = self._clock(), exc
             self._record_failure(currencies, exc, failures)
             return
+        self._rates_failed_at = self._rates_error = None
         by_currency: dict[str, list[RateQuote]] = {currency: [] for currency in currencies}
         for quote in quotes:
             if quote.currency in by_currency:

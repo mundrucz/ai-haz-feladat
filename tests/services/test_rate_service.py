@@ -220,6 +220,7 @@ async def test_rejected_currency_does_not_take_the_others_down(repository):
     failures = await rates.prepare({"EUR": (d(10, 3), d(10, 3)), "CZK": (d(10, 3), d(10, 3))})
 
     assert set(failures) == {"CZK"}
+    assert failures["CZK"].code == "mnb_rejected"
     assert (await rates.rate_on("EUR", d(10, 3))).rate == Decimal("410")
     with pytest.raises(MnbNoRateError):
         await rates.rate_on("CZK", d(10, 3))
@@ -270,25 +271,70 @@ async def test_unknown_support_when_mnb_is_down_and_nothing_is_stored(repository
     source = FakeSource()
     source.currencies_fail = MnbError("down")
     now = [0.0]
-    rates = service(repository, source, currencies_retry_seconds=60, clock=lambda: now[0])
+    rates = service(repository, source, retry_seconds=3600, clock=lambda: now[0])
 
     assert await rates.is_quoted("EUR") is None
     assert await rates.is_quoted("EUR") is None
     assert source.currency_calls == 1  # a sikertelen lekérést nem ismételjük azonnal
 
-    now[0] = 61
+    now[0] = 3601
     source.currencies_fail = None
     assert await rates.is_quoted("EUR") is True
 
 
 async def test_failed_fetch_is_not_remembered_as_covered(repository):
     source = FakeSource(fail=MnbError("down"))
-    rates = service(repository, source)
+    now = [0.0]
+    rates = service(repository, source, retry_seconds=3600, clock=lambda: now[0])
     assert "EUR" in await rates.prepare({"EUR": (d(10, 3), d(20, 3))})
 
+    now[0] = 3601
     source.fail = None
     assert await rates.prepare({"EUR": (d(10, 3), d(20, 3))}) == {}
     assert (await rates.rate_on("EUR", d(20, 3))).rate_date == d(20, 3)
+
+
+async def test_unreachable_mnb_is_retried_only_after_the_retry_interval(repository):
+    source = FakeSource(fail=MnbError("down"))
+    now = [0.0]
+    rates = service(repository, source, retry_seconds=3600, clock=lambda: now[0])
+    await rates.prepare({"EUR": (d(10, 3), d(20, 3))})
+
+    now[0] = 3599
+    failures = await rates.prepare({"EUR": (d(10, 3), d(20, 3)), "USD": (d(10, 3), d(20, 3))})
+
+    assert set(failures) == {"EUR", "USD"}
+    assert failures["EUR"].code == "mnb_unavailable"
+    assert len(source.calls) == 1
+
+    now[0] = 3600
+    source.fail = None
+    assert await rates.prepare({"EUR": (d(10, 3), d(20, 3))}) == {}
+    assert len(source.calls) == 2
+
+
+async def test_rejected_currency_does_not_pause_fetching(repository):
+    source = FakeSource(fail=MnbRejectedError("unknown currency"))
+    rates = service(repository, source, retry_seconds=3600, clock=lambda: 0.0)
+    await rates.prepare({"CZK": (d(10, 3), d(10, 3))})
+
+    source.fail = None
+    assert await rates.prepare({"EUR": (d(10, 3), d(10, 3))}) == {}
+
+
+async def test_stored_rate_is_trusted_only_when_every_day_up_to_the_date_was_fetched(repository):
+    rates = service(repository, FakeSource(), lookback_days=0)
+    await rates.prepare({"EUR": (d(9, 3), d(13, 3))})  # hétfő-péntek
+
+    assert (await rates.stored_rate_on("EUR", d(13, 3))).rate_date == d(13, 3)
+    assert await rates.stored_rate_on("EUR", d(16, 3)) is None  # 14-16. nincs lekérve
+
+
+async def test_stored_rate_falls_back_to_the_last_quote_when_the_gap_days_were_fetched(repository):
+    rates = service(repository, FakeSource())
+    await rates.prepare({"EUR": (d(15, 3), d(15, 3))})  # vasárnap: a péntek 13-i jegyzés érvényes
+
+    assert (await rates.stored_rate_on("EUR", d(15, 3))).rate_date == d(13, 3)
 
 
 async def test_today_is_not_marked_covered_so_it_can_be_refetched(repository):
