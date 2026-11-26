@@ -3,10 +3,14 @@
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import date, timedelta
-from decimal import Decimal
+
+from sqlalchemy import delete, select
+from sqlalchemy.dialects.sqlite import insert
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.clients.mnb_client import RateQuote
 from app.db.database import Database
+from app.db.tables import ExchangeRateRow, MnbCurrencyRow, RateCoverageRow
 
 _DAY = timedelta(days=1)
 
@@ -22,65 +26,66 @@ class RateRepository:
         self._db = db
 
     async def coverage(self, currency: str) -> list[tuple[date, date]]:
-        async with self._db.connect() as conn:
-            async with conn.execute(
-                "SELECT start_date, end_date FROM rate_coverage WHERE currency = ? ORDER BY start_date", (currency,)
-            ) as cursor:
-                return [(date.fromisoformat(r["start_date"]), date.fromisoformat(r["end_date"])) async for r in cursor]
+        async with self._db.session() as session:
+            return await self._coverage(session, currency)
+
+    @staticmethod
+    async def _coverage(session: AsyncSession, currency: str) -> list[tuple[date, date]]:
+        rows = await session.execute(
+            select(RateCoverageRow.start_date, RateCoverageRow.end_date)
+            .where(RateCoverageRow.currency == currency)
+            .order_by(RateCoverageRow.start_date)
+        )
+        return [(start, end) for start, end in rows]
 
     async def store(
         self, currency: str, start: date, end: date | None, quotes: Iterable[RateQuote]
     ) -> None:
         """Elmenti az árfolyamokat, és (ha `end` van) a [start, end] időszakot lekértként jegyzi."""
-        async with self._db.connect() as conn:
-            await conn.execute("BEGIN IMMEDIATE")
-            await conn.executemany(
-                "INSERT INTO exchange_rates (currency, rate_date, unit, rate) VALUES (?, ?, ?, ?) "
-                "ON CONFLICT (currency, rate_date) DO UPDATE SET unit = excluded.unit, rate = excluded.rate",
-                [(q.currency, q.rate_date.isoformat(), q.unit, str(q.rate)) for q in quotes],
-            )
-            if end is not None and end >= start:
-                async with conn.execute(
-                    "SELECT start_date, end_date FROM rate_coverage WHERE currency = ?", (currency,)
-                ) as cursor:
-                    ranges = [(date.fromisoformat(r["start_date"]), date.fromisoformat(r["end_date"])) async for r in cursor]
-                merged = merge_ranges([*ranges, (start, end)])
-                await conn.execute("DELETE FROM rate_coverage WHERE currency = ?", (currency,))
-                await conn.executemany(
-                    "INSERT INTO rate_coverage (currency, start_date, end_date) VALUES (?, ?, ?)",
-                    [(currency, s.isoformat(), e.isoformat()) for s, e in merged],
+        rates = [
+            {"currency": q.currency, "rate_date": q.rate_date, "unit": q.unit, "rate": q.rate} for q in quotes
+        ]
+        async with self._db.transaction(immediate=True) as session:
+            if rates:
+                statement = insert(ExchangeRateRow).values(rates)
+                await session.execute(
+                    statement.on_conflict_do_update(
+                        index_elements=[ExchangeRateRow.currency, ExchangeRateRow.rate_date],
+                        set_={"unit": statement.excluded.unit, "rate": statement.excluded.rate},
+                    )
                 )
-            await conn.commit()
+            if end is not None and end >= start:
+                merged = merge_ranges([*await self._coverage(session, currency), (start, end)])
+                await session.execute(delete(RateCoverageRow).where(RateCoverageRow.currency == currency))
+                session.add_all(RateCoverageRow(currency=currency, start_date=s, end_date=e) for s, e in merged)
 
     async def supported_currencies(self) -> SupportedCurrencies | None:
-        async with self._db.connect() as conn:
-            async with conn.execute("SELECT code, fetched_on FROM mnb_currencies") as cursor:
-                rows = await cursor.fetchall()
+        async with self._db.session() as session:
+            rows = (await session.scalars(select(MnbCurrencyRow))).all()
         if not rows:
             return None
-        return SupportedCurrencies(frozenset(r["code"] for r in rows), date.fromisoformat(rows[0]["fetched_on"]))
+        return SupportedCurrencies(frozenset(row.code for row in rows), rows[0].fetched_on)
 
     async def store_supported_currencies(self, codes: Iterable[str], fetched_on: date) -> None:
-        async with self._db.connect() as conn:
-            await conn.execute("BEGIN IMMEDIATE")
-            await conn.execute("DELETE FROM mnb_currencies")
-            await conn.executemany(
-                "INSERT INTO mnb_currencies (code, fetched_on) VALUES (?, ?)",
-                [(code, fetched_on.isoformat()) for code in codes],
-            )
-            await conn.commit()
+        async with self._db.transaction(immediate=True) as session:
+            await session.execute(delete(MnbCurrencyRow))
+            session.add_all(MnbCurrencyRow(code=code, fetched_on=fetched_on) for code in codes)
 
     async def latest_on_or_before(self, currency: str, day: date, earliest: date) -> RateQuote | None:
-        async with self._db.connect() as conn:
-            async with conn.execute(
-                "SELECT rate_date, unit, rate FROM exchange_rates "
-                "WHERE currency = ? AND rate_date <= ? AND rate_date >= ? ORDER BY rate_date DESC LIMIT 1",
-                (currency, day.isoformat(), earliest.isoformat()),
-            ) as cursor:
-                row = await cursor.fetchone()
+        async with self._db.session() as session:
+            row = await session.scalar(
+                select(ExchangeRateRow)
+                .where(
+                    ExchangeRateRow.currency == currency,
+                    ExchangeRateRow.rate_date <= day,
+                    ExchangeRateRow.rate_date >= earliest,
+                )
+                .order_by(ExchangeRateRow.rate_date.desc())
+                .limit(1)
+            )
         if row is None:
             return None
-        return RateQuote(currency, date.fromisoformat(row["rate_date"]), row["unit"], Decimal(row["rate"]))
+        return RateQuote(row.currency, row.rate_date, row.unit, row.rate)
 
 
 def merge_ranges(ranges: Iterable[tuple[date, date]]) -> list[tuple[date, date]]:
